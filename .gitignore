@@ -1,0 +1,30 @@
+.DS_Store
+.build/
+dist/
+.swiftpm/
+DerivedData/
+*.xcodeproj/
+*.xcworkspace/
+
+# Vendor executables, installers, archives, and disk images are out of scope.
+*.[Ee][Xx][Ee]
+*.[Zz][Ii][Pp]
+*.[Dd][Mm][Gg]
+*.[Pp][Kk][Gg]
+*.[Dd][Ll][Ll]
+*.[Ss][Yy][Ss]
+*.[Ii][Nn][Ff]
+*.[Aa][Ss][Aa][Rr]
+*.[Ll][Aa][Nn]
+*.[Ww][Aa][Ss][Mm]
+
+# Firmware payload formats are out of scope.
+*.[Bb][Ii][Nn]
+*.[Hh][Ee][Xx]
+*.[Uu][Ff]2
+
+# Do not stage reverse-engineering or vendor-material directories.
+analysis/
+extracted/
+firmware/
+vendor/

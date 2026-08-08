@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title description">
+  <title id="title">KeyCanvas application mark</title>
+  <desc id="description">An abstract keycap crossed by three colorful light ribbons.</desc>
+  <defs>
+    <linearGradient id="background" x1="104" y1="88" x2="916" y2="944" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#14253C"/>
+      <stop offset="0.55" stop-color="#0B1527"/>
+      <stop offset="1" stop-color="#070C17"/>
+    </linearGradient>
+    <linearGradient id="keycap" x1="266" y1="258" x2="770" y2="770" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2E4763"/>
+      <stop offset="0.5" stop-color="#172B42"/>
+      <stop offset="1" stop-color="#0D1B2E"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="316" y1="230" x2="718" y2="792" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#91A9C5" stop-opacity="0.74"/>
+      <stop offset="0.46" stop-color="#3F5E7D" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="#07111E" stop-opacity="0.9"/>
+    </linearGradient>
+    <linearGradient id="ribbonA" x1="240" y1="438" x2="804" y2="438" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#31D7EF"/>
+      <stop offset="1" stop-color="#46F2B8"/>
+    </linearGradient>
+    <linearGradient id="ribbonB" x1="226" y1="526" x2="820" y2="526" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7E73FF"/>
+      <stop offset="1" stop-color="#D66BFF"/>
+    </linearGradient>
+    <linearGradient id="ribbonC" x1="250" y1="611" x2="786" y2="611" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FF6F91"/>
+      <stop offset="1" stop-color="#FFB15C"/>
+    </linearGradient>
+    <filter id="shadow" x="-40%" y="-40%" width="180%" height="190%">
+      <feDropShadow dx="0" dy="38" stdDeviation="40" flood-color="#000713" flood-opacity="0.65"/>
+    </filter>
+    <filter id="glow" x="-30%" y="-100%" width="160%" height="300%">
+      <feGaussianBlur stdDeviation="12" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <clipPath id="keyclip">
+      <path d="M294 260C306 222 341 196 381 196H643C683 196 718 222 730 260L831 690C845 750 799 808 738 808H286C225 808 179 750 193 690Z"/>
+    </clipPath>
+  </defs>
+
+  <rect x="32" y="32" width="960" height="960" rx="224" fill="url(#background)"/>
+  <circle cx="194" cy="176" r="190" fill="#2FCADF" opacity="0.06"/>
+  <circle cx="862" cy="852" r="252" fill="#B05CFF" opacity="0.07"/>
+
+  <g filter="url(#shadow)" transform="rotate(-4 512 512)">
+    <path d="M294 260C306 222 341 196 381 196H643C683 196 718 222 730 260L831 690C845 750 799 808 738 808H286C225 808 179 750 193 690Z" fill="url(#keycap)" stroke="url(#rim)" stroke-width="14"/>
+    <path d="M335 281C343 257 365 241 391 241H633C659 241 681 257 689 281L777 655C786 692 758 728 720 728H304C266 728 238 692 247 655Z" fill="#0B1829" fill-opacity="0.35" stroke="#91B5D6" stroke-opacity="0.18" stroke-width="5"/>
+
+    <g clip-path="url(#keyclip)" fill="none" stroke-linecap="round" filter="url(#glow)">
+      <path d="M173 485C279 385 351 384 446 454C557 536 654 500 850 346" stroke="url(#ribbonA)" stroke-width="38"/>
+      <path d="M160 584C294 455 384 469 482 544C591 628 685 600 865 440" stroke="url(#ribbonB)" stroke-width="38"/>
+      <path d="M184 676C312 554 402 567 493 629C607 706 688 692 839 548" stroke="url(#ribbonC)" stroke-width="38"/>
+    </g>
+
+    <circle cx="686" cy="316" r="12" fill="#C9E6FF" opacity="0.72"/>
+    <circle cx="724" cy="304" r="6" fill="#C9E6FF" opacity="0.42"/>
+  </g>
+</svg>
+
