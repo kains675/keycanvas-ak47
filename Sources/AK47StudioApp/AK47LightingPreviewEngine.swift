@@ -88,6 +88,7 @@ enum AK47LightingPreviewEngine {
     time: TimeInterval,
     speedLevel: Double,
     brightnessLevel: Double,
+    direction: Int = 0,
     baseColor: AK47LightingPreviewRGB,
     accentColor: AK47LightingPreviewRGB,
     manualPresses: [AK47LightingPreviewPress] = [],
@@ -96,6 +97,10 @@ enum AK47LightingPreviewEngine {
     let time = max(0, time)
     let speed = min(5, max(1, speedLevel))
     let brightness = min(5, max(0, brightnessLevel)) / 5
+    let supportsDirection = !effect.configurationCapabilities.intersection([
+      .horizontalDirection, .verticalDirection,
+    ]).isEmpty
+    let directionSign = supportsDirection && direction != 0 ? -1.0 : 1.0
     let presses = activePresses(
       effect: effect,
       keys: keys,
@@ -127,6 +132,7 @@ enum AK47LightingPreviewEngine {
             keyCount: keys.count,
             time: time,
             speed: speed,
+            directionSign: directionSign,
             baseColor: baseColor,
             accentColor: accentColor
           )
@@ -173,6 +179,7 @@ enum AK47LightingPreviewEngine {
     keyCount: Int,
     time: TimeInterval,
     speed: Double,
+    directionSign: Double,
     baseColor: AK47LightingPreviewRGB,
     accentColor: AK47LightingPreviewRGB
   ) -> AK47LightingPreviewSample {
@@ -185,7 +192,7 @@ enum AK47LightingPreviewEngine {
       (key.center.y - AK47PhysicalLayout.canvasSize.height / 2)
       / AK47PhysicalLayout.canvasSize.height
     let distance = hypot(dx, dy)
-    let phase = time * (0.22 + speed * 0.13)
+    let phase = time * (0.22 + speed * 0.13) * directionSign
 
     switch effect {
     case .staticMode:

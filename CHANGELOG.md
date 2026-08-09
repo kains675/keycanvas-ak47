@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Reorganized Lighting into separate onboard-effect and per-key RGB workspaces,
+  made all 20 choices including `LED Off` visible in one adaptive selector, and
+  separated local profile saving from contextual, confirmed device apply.
+- Rebuilt the per-key editor around a direct selected-color/off toggle: one
+  click alternates a key between the brush color and black RGB, while a drag
+  locks its first key's target across the stroke. Added lit/off counts,
+  one-shot color sampling, all-color/all-off actions, one-step undo, responsive
+  layout, and accessible presets. Editing still performs no HID operation.
+- Added a visible shared 1–5 brightness control for per-key RGB. Sparse local
+  profiles are completed as 84 verified device slots with missing keys sent as
+  black RGB, while unknown imported slots remain local and are never sent.
 - Replaced the three generic lighting scenes with the 19 identified AK47
   non-PRO onboard mode IDs, separate local off state, verified per-mode control
   capabilities, stable profile identifiers, and legacy profile fallbacks.
@@ -34,9 +45,9 @@
 - Added three separately confirmed, typed Feature operations for the exact
   wired revision: clock synchronization, one currently selected onboard mode
   in `0...19`, and brightness plus a complete 84-key RGB table.
-- Added a physical 84-key RGB painter with per-key paint, fill, and clear
-  actions. Device apply remains disabled until every verified light position is
-  present exactly once.
+- Added a physical 84-key RGB painter with per-key toggle, fill, all-off, and
+  color-sampling actions. The verified 84-slot device payload is always
+  complete because unpainted keys are represented as black RGB.
 - Serialized each verified operation with 35ms pacing, a 360ms limit per
   asynchronous Feature call, 64-byte ACK byte-3 validation where required,
   immediate failure without retry, and preflight/postflight topology checks.

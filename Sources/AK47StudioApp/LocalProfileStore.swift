@@ -20,11 +20,16 @@ enum LocalDisplayAssetLimits {
 @MainActor
 final class LocalProfileStore: ObservableObject {
   @Published private(set) var profiles: [DeviceProfile]
-  @Published var selectedID: String
+  @Published var selectedID: String {
+    didSet {
+      status = profileStatuses[selectedID] ?? .ready
+    }
+  }
   @Published private(set) var status: ProfileStoreStatus = .ready
 
   private let fileManager: FileManager
   private let storageDirectory: URL?
+  private var profileStatuses: [String: ProfileStoreStatus] = [:]
 
   init(fileManager: FileManager = .default, storageDirectory: URL? = nil) {
     self.fileManager = fileManager
@@ -34,6 +39,9 @@ final class LocalProfileStore: ObservableObject {
     let initial = loaded.isEmpty ? [DeviceProfile.keyCanvasDraft(named: "Mac Starter")] : loaded
     self.profiles = initial
     self.selectedID = initial[0].identifier
+    self.profileStatuses = initial.reduce(into: [:]) { statuses, profile in
+      statuses[profile.identifier] = .ready
+    }
   }
 
   var selectedProfile: DeviceProfile {
@@ -83,13 +91,13 @@ final class LocalProfileStore: ObservableObject {
     let profile = DeviceProfile.keyCanvasDraft(named: name)
     profiles.append(profile)
     selectedID = profile.identifier
-    status = .unsaved
+    setStatus(.unsaved, for: profile.identifier)
   }
 
   func renameSelected(to name: String) {
     guard let index = selectedIndex else { return }
     profiles[index].name = name
-    status = .unsaved
+    setSelectedStatus(.unsaved)
   }
 
   func setKeyAssignment(_ action: KeyAction, position: Int, layer: Int = 0) {
@@ -100,25 +108,25 @@ final class LocalProfileStore: ObservableObject {
     profiles[index].keymap.assignments.append(
       KeyAssignment(layer: layer, position: position, action: action)
     )
-    status = .unsaved
+    setSelectedStatus(.unsaved)
   }
 
   func updateLighting(_ lighting: LightingProfile) {
     guard let index = selectedIndex else { return }
     profiles[index].lighting = lighting
-    status = .unsaved
+    setSelectedStatus(.unsaved)
   }
 
   func replaceMacros(_ macros: [MacroDefinition]) {
     guard let index = selectedIndex else { return }
     profiles[index].macros = macros
-    status = .unsaved
+    setSelectedStatus(.unsaved)
   }
 
   func updateTFT(_ tft: TFTProfile) {
     guard let index = selectedIndex else { return }
     profiles[index].tft = tft
-    status = .unsaved
+    setSelectedStatus(.unsaved)
   }
 
   func copyDisplayAsset(
@@ -174,7 +182,7 @@ final class LocalProfileStore: ObservableObject {
     profiles[index].tft.assets.append(reference)
     profiles[index].tft.playlist.removeAll { $0 == reference.identifier }
     profiles[index].tft.playlist.insert(reference.identifier, at: 0)
-    status = .unsaved
+    setSelectedStatus(.unsaved)
     return reference
   }
 
@@ -199,22 +207,26 @@ final class LocalProfileStore: ObservableObject {
   func updateSettings(_ settings: DeviceSettings) {
     guard let index = selectedIndex else { return }
     profiles[index].settings = settings
-    status = .unsaved
+    setSelectedStatus(.unsaved)
   }
 
   func saveSelected() {
+    let identifier = selectedID
     do {
+      guard let index = selectedIndex else {
+        throw ProfileStoreError.missingProfile
+      }
       let directory = try profileDirectory(createIfNeeded: true)
-      let profile = selectedProfile
-      guard profile.identifier == selectedID else {
+      let profile = profiles[index]
+      guard profile.identifier == identifier else {
         throw ProfileStoreError.invalidProfileIdentifier
       }
       let url = try profileFileURL(for: profile.identifier, inside: directory)
       let data = try ProfileJSONCodec.encode(profile)
       try data.write(to: url, options: .atomic)
-      status = .saved(url.lastPathComponent)
+      setStatus(.saved(url.lastPathComponent), for: identifier)
     } catch {
-      status = .failed(error.localizedDescription)
+      setStatus(.failed(error.localizedDescription), for: identifier)
     }
   }
 
@@ -265,9 +277,9 @@ final class LocalProfileStore: ObservableObject {
     do {
       let data = try ProfileJSONCodec.encode(selectedProfile)
       try data.write(to: url, options: .atomic)
-      status = .saved(url.lastPathComponent)
+      setSelectedStatus(.saved(url.lastPathComponent))
     } catch {
-      status = .failed(error.localizedDescription)
+      setSelectedStatus(.failed(error.localizedDescription))
     }
   }
 
@@ -290,9 +302,9 @@ final class LocalProfileStore: ObservableObject {
       profile.identifier = freshProfileIdentifier()
       profiles.append(profile)
       selectedID = profile.identifier
-      status = .unsaved
+      setStatus(.unsaved, for: profile.identifier)
     } catch {
-      status = .failed(error.localizedDescription)
+      setSelectedStatus(.failed(error.localizedDescription))
     }
   }
 
@@ -345,16 +357,32 @@ final class LocalProfileStore: ObservableObject {
 
       profiles.append(contentsOf: result.profiles)
       selectedID = result.activeProfileIdentifier ?? result.profiles[0].identifier
-      status = .imported(
-        profileCount: result.profiles.count,
-        layerCount: result.assets.count
+      for profile in result.profiles {
+        setStatus(.saved("\(profile.identifier).json"), for: profile.identifier)
+      }
+      setSelectedStatus(
+        .imported(
+          profileCount: result.profiles.count,
+          layerCount: result.assets.count
+        )
       )
     } catch {
       // Rollback is best-effort and only targets files published by this import attempt.
       for createdURL in createdURLs.reversed() {
         try? fileManager.removeItem(at: createdURL)
       }
-      status = .failed(error.localizedDescription)
+      setSelectedStatus(.failed(error.localizedDescription))
+    }
+  }
+
+  private func setSelectedStatus(_ newStatus: ProfileStoreStatus) {
+    setStatus(newStatus, for: selectedID)
+  }
+
+  private func setStatus(_ newStatus: ProfileStoreStatus, for identifier: String) {
+    profileStatuses[identifier] = newStatus
+    if selectedID == identifier {
+      status = newStatus
     }
   }
 

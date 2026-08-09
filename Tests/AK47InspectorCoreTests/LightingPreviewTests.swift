@@ -136,6 +136,48 @@ final class LightingPreviewTests: XCTestCase {
     XCTAssertTrue(frame.values.allSatisfy { $0.intensity == 0 })
   }
 
+  func testDirectionReversesOnlyEffectsWithVerifiedDirectionControl() {
+    let forward = AK47LightingPreviewEngine.frame(
+      effect: .flowing,
+      time: 0.63,
+      speedLevel: 3,
+      brightnessLevel: 4,
+      direction: 0,
+      baseColor: base,
+      accentColor: accent
+    )
+    let reverse = AK47LightingPreviewEngine.frame(
+      effect: .flowing,
+      time: 0.63,
+      speedLevel: 3,
+      brightnessLevel: 4,
+      direction: 1,
+      baseColor: base,
+      accentColor: accent
+    )
+    XCTAssertNotEqual(forward, reverse)
+
+    let breathA = AK47LightingPreviewEngine.frame(
+      effect: .breath,
+      time: 0.63,
+      speedLevel: 3,
+      brightnessLevel: 4,
+      direction: 0,
+      baseColor: base,
+      accentColor: accent
+    )
+    let breathB = AK47LightingPreviewEngine.frame(
+      effect: .breath,
+      time: 0.63,
+      speedLevel: 3,
+      brightnessLevel: 4,
+      direction: 1,
+      baseColor: base,
+      accentColor: accent
+    )
+    XCTAssertEqual(breathA, breathB)
+  }
+
   private func makeFrame(
     effect: AK47OnboardLightingEffect,
     time: TimeInterval,

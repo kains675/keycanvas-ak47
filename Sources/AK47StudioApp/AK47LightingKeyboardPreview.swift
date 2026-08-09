@@ -9,6 +9,7 @@ struct AK47LightingKeyboardPreview: View {
   let lightingEnabled: Bool
   let brightnessLevel: Double
   let speedLevel: Double
+  let direction: Int
   let baseColor: AK47InspectorCore.RGBColor
   let accentColor: AK47InspectorCore.RGBColor
   let revision: Int
@@ -44,6 +45,7 @@ struct AK47LightingKeyboardPreview: View {
         time: time,
         speedLevel: speedLevel,
         brightnessLevel: brightnessLevel,
+        direction: direction,
         baseColor: AK47LightingPreviewRGB(baseColor),
         accentColor: AK47LightingPreviewRGB(accentColor),
         manualPresses: manualPresses,
