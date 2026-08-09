@@ -6,6 +6,9 @@ DerivedData/
 *.xcodeproj/
 *.xcworkspace/
 
+# JSON is denied unless an exact path is reviewed and allowlisted by the scan.
+*.json
+
 # Vendor executables, installers, archives, and disk images are out of scope.
 *.[Ee][Xx][Ee]
 *.[Zz][Ii][Pp]
@@ -28,3 +31,13 @@ analysis/
 extracted/
 firmware/
 vendor/
+raw-capture/
+raw-captures/
+
+# Raw USB/HID capture and monitoring formats stay local.
+*.pcap
+*.pcapng
+*.usbmon
+*.etl
+*.trace
+*.log

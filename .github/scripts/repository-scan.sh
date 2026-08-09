@@ -6,8 +6,19 @@ cd "$project_root"
 
 sh Scripts/check-readonly-api.sh
 
+is_allowlisted_json() {
+    case "$1" in
+        # Add only exact, lowercased paths reviewed for provenance and content.
+        # path/to/reviewed-project-authored.json) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    file_list=$(git ls-files)
+    file_list=$({
+        git ls-files
+        git ls-files --others --exclude-standard
+    } | LC_ALL=C sort -u)
 else
     file_list=$(find . -type f \
         ! -path './.git/*' \
@@ -29,9 +40,16 @@ for path in $file_list; do
             exit 1
             ;;
         *.exe|*.dll|*.sys|*.msi|*.dmg|*.pkg|*.zip|*.rar|*.7z|*.tar|*.tgz|*.gz|*.bz2|*.xz|\
-        *.bin|*.hex|*.uf2|*.dfu|*.rom|*.fw|*.cap)
+        *.bin|*.hex|*.uf2|*.dfu|*.rom|*.fw|*.cap|\
+        *.pcap|*.pcapng|*.usbmon|*.etl|*.trace|*.log)
             echo "Repository boundary violation: disallowed artifact: $path" >&2
             exit 1
+            ;;
+        *.json)
+            if ! is_allowlisted_json "$normalized"; then
+                echo "Repository boundary violation: JSON is not explicitly allowlisted: $path" >&2
+                exit 1
+            fi
             ;;
         *.png|*.jpg|*.jpeg|*.gif|*.bmp|*.tif|*.tiff|*.webp|*.ico|*.icns|*.svg|*.ai|*.psd)
             if [ "$normalized" != "artwork/keycanvas-mark.svg" ]; then
@@ -42,7 +60,8 @@ for path in $file_list; do
     esac
 
     case "/$normalized/" in
-        */firmware/*|*/vendor/*|*/extracted/*|*/device-dumps/*|*/reverse-engineering/*)
+        */analysis/*|*/firmware/*|*/vendor/*|*/extracted/*|*/device-dumps/*|*/reverse-engineering/*|\
+        */raw-capture/*|*/raw-captures/*)
             echo "Repository boundary violation: disallowed material directory: $path" >&2
             exit 1
             ;;

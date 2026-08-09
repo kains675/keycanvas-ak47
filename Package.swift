@@ -20,10 +20,20 @@ let package = Package(
       name: "keycanvas",
       targets: ["AK47StudioApp"]
     ),
+    .executable(
+      name: "keycanvas-trace",
+      targets: ["KeyCanvasTraceCLI"]
+    ),
   ],
   targets: [
     .target(
-      name: "AK47InspectorCore"
+      name: "AK47InspectorCore",
+      linkerSettings: [
+        .linkedLibrary("sqlite3")
+      ]
+    ),
+    .target(
+      name: "KeyCanvasTraceCore"
     ),
     .executableTarget(
       name: "AK47InspectorCLI",
@@ -33,9 +43,17 @@ let package = Package(
       name: "AK47StudioApp",
       dependencies: ["AK47InspectorCore"]
     ),
+    .executableTarget(
+      name: "KeyCanvasTraceCLI",
+      dependencies: ["KeyCanvasTraceCore"]
+    ),
     .testTarget(
       name: "AK47InspectorCoreTests",
-      dependencies: ["AK47InspectorCore"]
+      dependencies: ["AK47InspectorCore", "AK47StudioApp"]
+    ),
+    .testTarget(
+      name: "KeyCanvasTraceCoreTests",
+      dependencies: ["KeyCanvasTraceCore"]
     ),
   ]
 )

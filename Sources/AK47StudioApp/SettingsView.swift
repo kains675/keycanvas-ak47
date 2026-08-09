@@ -26,8 +26,8 @@ struct SettingsView: View {
           eyebrow: studioText("KeyCanvas 환경", "KeyCanvas preferences", language: language),
           title: studioText("설정", "Settings", language: language),
           detail: studioText(
-            "앱의 표시 방식과 읽기 전용 검사 동작을 선택합니다.",
-            "Choose how the app looks and how its read-only inspection behaves.",
+            "앱 표시 방식과 로컬 초안, 명시적으로 확인하는 제한적 장치 작업을 관리합니다.",
+            "Manage appearance, local drafts, and explicitly confirmed bounded device operations.",
             language: language
           )
         )
@@ -57,6 +57,45 @@ struct SettingsView: View {
             }
           }
 
+          Divider()
+
+          VStack(alignment: .leading, spacing: 10) {
+            Button {
+              profileStore.presentWindowsBackupImportPanel(language: language)
+            } label: {
+              Label(
+                studioText(
+                  "Windows 백업 가져오기…",
+                  "Import Windows backup…",
+                  language: language
+                ),
+                systemImage: "square.and.arrow.down.on.square"
+              )
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(StudioPalette.blue)
+
+            Text(
+              studioText(
+                "Windows 설정 앱을 닫은 뒤 ‘Archon AK47 Driver Files’ 폴더를 직접 선택하세요. SQLite DB는 읽기 전용으로 제한 조회하고, 화면용 PNG 프레임은 원본 치수와 지연 시간이 보존된 GIF로 앱 로컬 폴더에 복사합니다. 화면 캔버스는 240×135이며, 프로그램을 실행하거나 네트워크·키보드에 접근하지 않습니다.",
+                "Close the Windows settings app, then select the ‘Archon AK47 Driver Files’ folder itself. KeyCanvas reads a bounded set of SQLite fields in read-only mode and preserves screen PNG frames as local GIFs with their source dimensions and delays. The screen canvas remains 240×135; no program is launched and neither the network nor keyboard is accessed.",
+                language: language
+              )
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+            Text(
+              studioText(
+                "Windows 숫자 설정의 단위나 의미가 확인되지 않은 값은 임의로 변환하지 않고 원시 가져오기 메타데이터로만 보존합니다.",
+                "Windows numeric settings whose units or meanings are unverified are retained only as raw import metadata, without guessed conversions.",
+                language: language
+              )
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+          }
+
           Text(
             studioText(
               "저장 위치: ~/Library/Application Support/KeyCanvas",
@@ -68,7 +107,7 @@ struct SettingsView: View {
           .foregroundStyle(.secondary)
 
           Label(
-            profileStore.statusLabel,
+            profileStore.statusLabel(in: language),
             systemImage: profileStatusSymbol
           )
           .font(.caption)
@@ -105,8 +144,8 @@ struct SettingsView: View {
         ) {
           Text(
             studioText(
-              "이 값은 프로필 형식에만 저장됩니다. 실제 하드웨어 지원 범위가 확인되기 전에는 키보드로 전송되지 않습니다.",
-              "These values are stored only in the profile format and are not sent until hardware support is verified.",
+              "이 절전·디바운스·보고율·Fn 값은 프로필 형식에만 저장되며 현재 빌드에서는 키보드로 전송되지 않습니다.",
+              "These sleep, debounce, report-rate, and Fn values stay in the profile format and are not transmitted by this build.",
               language: language
             )
           )
@@ -182,8 +221,8 @@ struct SettingsView: View {
               .foregroundStyle(StudioPalette.mint)
             Text(
               studioText(
-                "KeyCanvas는 IOHID 레지스트리 속성만 열거합니다. 장치를 열거나 report를 보내는 코드 경로가 없습니다.",
-                "KeyCanvas only enumerates IOHID registry properties. It has no code path that opens the device or sends reports.",
+                "기본 새로고침과 직접 report 진단은 읽기 전용입니다. 키별 F5 조회, 시계 동기화, 선택한 내장 모드 하나, 완성된 84키 RGB 적용은 각각 별도 확인이 필요합니다. 유선 revision 0x0115의 FF13 Feature 채널만 사용하며, 세 적용 작업은 35ms 간격을 두고 모든 비동기 작업은 360ms로 제한합니다. ACK byte 3을 검증하고 재시도·output·LCD·키맵·매크로·펌웨어 작업은 하지 않습니다.",
+                "Normal refresh and direct report diagnostics are read only. The per-key F5 query, clock sync, one selected onboard mode, and a complete 84-key RGB apply each require separate confirmation. Only the wired revision 0x0115 FF13 Feature channel is used; the three apply paths use 35 ms pacing and every asynchronous operation has a 360 ms limit. ACK byte 3 is validated, with no retry, output, LCD, keymap, macro, or firmware operation.",
                 language: language
               )
             )
@@ -199,7 +238,9 @@ struct SettingsView: View {
           LabeledContent(studioText("앱", "App", language: language), value: "KeyCanvas")
           LabeledContent(
             studioText("모드", "Mode", language: language),
-            value: studioText("데모 · 읽기 전용", "Demo · read-only", language: language))
+            value: studioText(
+              "로컬 편집 · 확인형 장치 작업", "Local editing · confirmed device operations",
+              language: language))
           LabeledContent(
             studioText("최소 시스템", "Minimum system", language: language), value: "macOS 13")
           Text(
@@ -258,6 +299,7 @@ struct SettingsView: View {
     switch profileStore.status {
     case .failed: "exclamationmark.triangle"
     case .saved: "checkmark.circle"
+    case .imported: "square.and.arrow.down.on.square"
     case .unsaved: "pencil.circle"
     case .ready: "folder"
     }
@@ -267,6 +309,7 @@ struct SettingsView: View {
     switch profileStore.status {
     case .failed: StudioPalette.coral
     case .saved: StudioPalette.mint
+    case .imported: StudioPalette.mint
     case .unsaved: StudioPalette.violet
     case .ready: .secondary
     }

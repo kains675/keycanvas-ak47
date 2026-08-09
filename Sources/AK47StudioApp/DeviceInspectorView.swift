@@ -4,17 +4,19 @@ import SwiftUI
 struct DeviceInspectorView: View {
   @ObservedObject var model: StudioModel
   @Environment(\.studioLanguage) private var language
+  @State private var showsRGBQueryConfirmation = false
+  @State private var showsClockSyncConfirmation = false
 
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 22) {
         HStack(alignment: .top, spacing: 20) {
           StudioSectionHeader(
-            eyebrow: studioText("속성 전용", "Properties only", language: language),
+            eyebrow: studioText("HID 진단", "HID diagnostics", language: language),
             title: studioText("장치 검사기", "Device Inspector", language: language),
             detail: studioText(
-              "일치하는 HID 컬렉션의 레지스트리 속성을 엽니다. 장치 open, report 전송, 펌웨어 작업은 수행하지 않습니다.",
-              "View registry properties for matching HID collections. The device is not opened; no reports or firmware operations occur.",
+              "기본 진단은 HID 속성과 직접 GetReport만 읽습니다. 시계 동기화와 키별 F5 조회는 각각 별도 확인 뒤 정확한 유선 장치에서 한 번 실행됩니다. 조명 적용은 조명 화면에서 별도로 확인하며 펌웨어 작업은 수행하지 않습니다.",
+              "Normal diagnostics read HID properties and direct GetReport data only. Clock sync and the per-key F5 query each run once after separate confirmation on the exact wired device. Lighting apply is confirmed separately in Lighting, and no firmware operation occurs.",
               language: language
             )
           )
@@ -25,7 +27,7 @@ struct DeviceInspectorView: View {
             Label(studioText("새로고침", "Refresh", language: language), systemImage: "arrow.clockwise")
           }
           .buttonStyle(.bordered)
-          .disabled(model.inspectorState == .scanning)
+          .disabled(!model.canRefreshInspector)
         }
 
         safetyBanner
@@ -46,6 +48,9 @@ struct DeviceInspectorView: View {
           emptyState
         } else {
           summary
+          clockSyncPanel
+          readOnlyReportProbe
+          experimentalRGBQuery
           collectionList
         }
       }
@@ -53,6 +58,94 @@ struct DeviceInspectorView: View {
       .frame(maxWidth: 1060)
       .frame(maxWidth: .infinity, alignment: .top)
     }
+    .alert(
+      studioText("키보드 시계를 동기화할까요?", "Synchronize the keyboard clock?", language: language),
+      isPresented: $showsClockSyncConfirmation
+    ) {
+      Button(studioText("취소", "Cancel", language: language), role: .cancel) {}
+      Button(studioText("지금 동기화", "Sync now", language: language)) {
+        model.synchronizeClockNow()
+      }
+    } message: {
+      Text(
+        studioText(
+          "현재 Mac의 로컬 날짜와 시각을 첫 번째 화면 슬롯에 한 번 전송합니다. ACK가 정의된 단계의 byte 3을 확인하며 자동 재시도하지 않습니다. 현재 장치 시각을 읽거나 이전 값으로 되돌리는 기능은 없습니다.",
+          "Sends the Mac's current local date and time once to the first display slot. ACK-required stages validate byte 3 and never retry automatically. The current device time cannot be read back or restored.",
+          language: language
+        )
+      )
+    }
+  }
+
+  private var clockSyncPanel: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      HStack(alignment: .top, spacing: 14) {
+        VStack(alignment: .leading, spacing: 5) {
+          Label(
+            studioText("시계 동기화", "Clock synchronization", language: language),
+            systemImage: "clock.arrow.circlepath"
+          )
+          .font(.headline)
+          Text(
+            studioText(
+              "확인된 시계 Feature 순서로 로컬 시각을 한 번 전송합니다. 각 명령과 필요한 ACK 사이에 35ms 간격을 두고 비동기 작업마다 360ms에서 중단하며, 펌웨어나 다른 설정 영역에는 접근하지 않습니다.",
+              "Sends local time once through the verified clock Feature sequence. It uses 35 ms pacing between commands and required ACKs, limits each asynchronous operation to 360 ms, and does not access firmware or other settings regions.",
+              language: language
+            )
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        }
+        Spacer()
+        Button {
+          showsClockSyncConfirmation = true
+        } label: {
+          Label(
+            studioText("시계 동기화…", "Sync clock…", language: language),
+            systemImage: "clock"
+          )
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(StudioPalette.coral)
+        .disabled(!model.canSynchronizeClock)
+      }
+
+      switch model.deviceWriteState {
+      case .writing(.clockSync):
+        HStack(spacing: 10) {
+          ProgressView()
+          Text(studioText("ACK를 확인하며 전송 중…", "Sending with ACK validation…", language: language))
+        }
+        .font(.callout)
+      case .succeeded(.clockSync, let date):
+        Label(
+          studioText(
+            "시계 동기화 완료 · \(date.formatted(date: .omitted, time: .standard))",
+            "Clock synchronized · \(date.formatted(date: .omitted, time: .standard))",
+            language: language
+          ),
+          systemImage: "checkmark.circle.fill"
+        )
+        .foregroundStyle(StudioPalette.mint)
+      case .failed(.clockSync, let message):
+        Label(message, systemImage: "exclamationmark.triangle")
+          .font(.caption)
+          .foregroundStyle(StudioPalette.coral)
+          .textSelection(.enabled)
+      default:
+        Label(
+          studioText(
+            "명시적으로 누를 때만 한 번 실행됩니다.",
+            "Runs once only after an explicit click.",
+            language: language
+          ),
+          systemImage: "hand.tap"
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+      }
+    }
+    .studioPanel()
   }
 
   private var safetyBanner: some View {
@@ -61,12 +154,18 @@ struct DeviceInspectorView: View {
         .font(.title3)
         .foregroundStyle(StudioPalette.mint)
       VStack(alignment: .leading, spacing: 4) {
-        Text(studioText("읽기 전용 경계가 적용됩니다", "Read-only boundary enforced", language: language))
-          .font(.headline)
         Text(
           studioText(
-            "현재 앱 target에는 HID 쓰기, feature report, output report, 부트로더 진입 API가 없습니다.",
-            "This app target contains no HID write, feature report, output report, or bootloader-entry API.",
+            "기본 진단은 읽기 전용입니다",
+            "Normal diagnostics are read only",
+            language: language
+          )
+        )
+        .font(.headline)
+        Text(
+          studioText(
+            "읽기 전용 report 진단은 GetReport만 호출합니다. F5 RGB 조회와 시계·조명 적용은 서로 다른 확인이 필요하며 revision 0x0115의 FF13 Feature 채널만 사용합니다. 자동 재시도·output·LCD·키맵·매크로·펌웨어·부트로더 작업은 없습니다.",
+            "The read-only report probe calls GetReport only. The F5 RGB query and clock or lighting operations require distinct confirmations and use only the revision 0x0115 FF13 Feature channel. There is no automatic retry, output, LCD, keymap, macro, firmware, or bootloader operation.",
             language: language
           )
         )
@@ -79,6 +178,154 @@ struct DeviceInspectorView: View {
         .foregroundStyle(.secondary)
     }
     .studioPanel(padding: 16)
+  }
+
+  private var experimentalRGBQuery: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      HStack(alignment: .top, spacing: 14) {
+        VStack(alignment: .leading, spacing: 5) {
+          Label(
+            studioText(
+              "실험적 키별 RGB 1회 조회",
+              "Experimental one-shot per-key RGB query",
+              language: language
+            ),
+            systemImage: "lightbulb.2"
+          )
+          .font(.headline)
+
+          Text(
+            studioText(
+              "유선 revision 0x0115의 FF13 설정 채널에 검증된 조회 명령을 한 번 보내고 64바이트 응답 9개를 읽습니다. 결과는 메모리에만 표시하며 프로필이나 파일에 저장하지 않습니다.",
+              "Sends the verified query once to the wired revision 0x0115 FF13 command channel and reads nine 64-byte responses. Results stay in memory and are not saved to a profile or file.",
+              language: language
+            )
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        }
+        Spacer()
+        Button {
+          showsRGBQueryConfirmation = true
+        } label: {
+          Label(
+            studioText("1회 조회…", "Query once…", language: language),
+            systemImage: "exclamationmark.arrow.triangle.2.circlepath"
+          )
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(StudioPalette.coral)
+        .disabled(!model.canRunPerKeyRGBQuery)
+      }
+
+      switch model.perKeyRGBQueryState {
+      case .idle:
+        Label(
+          studioText(
+            "자동으로 실행되지 않습니다. 실행 전 현재 조명 상태를 눈으로 확인해 두세요.",
+            "This never runs automatically. Note the current lighting before continuing.",
+            language: language
+          ),
+          systemImage: "hand.raised"
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+      case .reading:
+        HStack(spacing: 10) {
+          ProgressView()
+          Text(
+            studioText(
+              "조회 1회와 종료 응답을 확인하는 중…",
+              "Running one query and validating its finish response…",
+              language: language
+            )
+          )
+        }
+        .font(.callout)
+      case .failed(let message):
+        Label(message, systemImage: "exclamationmark.triangle")
+          .font(.caption.monospaced())
+          .foregroundStyle(StudioPalette.coral)
+          .textSelection(.enabled)
+      case .ready(let snapshot):
+        rgbQueryResult(snapshot)
+      }
+    }
+    .studioPanel()
+    .alert(
+      studioText("실험적 장치 질의", "Experimental device query", language: language),
+      isPresented: $showsRGBQueryConfirmation
+    ) {
+      Button(studioText("취소", "Cancel", language: language), role: .cancel) {}
+      Button(
+        studioText("정확히 1회 실행", "Run exactly once", language: language),
+        role: .destructive
+      ) {
+        model.runPerKeyRGBQueryOnce()
+      }
+    } message: {
+      Text(
+        studioText(
+          "이 동작은 키별 색상 조회용 Feature 명령과 정상 종료 명령을 전송합니다. Windows 앱에서는 조회 경로이지만, 설정이 전혀 바뀌지 않는지는 실제 장치에서 아직 확인되지 않았습니다. 조명이나 화면이 변하면 즉시 사용을 중단하고 USB를 다시 연결하세요.",
+          "This sends a Feature command for per-key color readback and a normal finish command. The Windows app uses it as a read path, but unchanged device state has not yet been confirmed on hardware. If lighting or the screen changes, stop and reconnect USB.",
+          language: language
+        )
+      )
+    }
+  }
+
+  private func rgbQueryResult(_ snapshot: AK47PerKeyRGBSnapshot) -> some View {
+    VStack(alignment: .leading, spacing: 12) {
+      Label(
+        studioText(
+          "종료 응답까지 확인했습니다.",
+          "The finish response was validated.",
+          language: language
+        ),
+        systemImage: "checkmark.seal.fill"
+      )
+      .foregroundStyle(StudioPalette.mint)
+
+      HStack(spacing: 20) {
+        InspectorFact(
+          label: studioText("읽은 키", "Keys read", language: language),
+          value: "\(snapshot.values.count)"
+        )
+        InspectorFact(
+          label: studioText("0이 아닌 색", "Nonzero colors", language: language),
+          value: "\(snapshot.nonzeroColorCount)"
+        )
+        InspectorFact(
+          label: studioText("서로 다른 색", "Distinct colors", language: language),
+          value: "\(snapshot.distinctColorCount)"
+        )
+      }
+
+      LazyVGrid(
+        columns: Array(repeating: GridItem(.fixed(16), spacing: 5), count: 14),
+        alignment: .leading,
+        spacing: 5
+      ) {
+        ForEach(snapshot.values, id: \.lightIndex) { value in
+          RoundedRectangle(cornerRadius: 3, style: .continuous)
+            .fill(
+              Color(
+                red: Double(value.color.red) / 255,
+                green: Double(value.color.green) / 255,
+                blue: Double(value.color.blue) / 255
+              )
+            )
+            .overlay(
+              RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .stroke(.white.opacity(0.22), lineWidth: 0.5)
+            )
+            .frame(width: 16, height: 16)
+            .help(
+              "#\(value.lightIndex) · RGB \(value.color.red), \(value.color.green), \(value.color.blue)"
+            )
+        }
+      }
+    }
   }
 
   private var summary: some View {
@@ -107,9 +354,134 @@ struct DeviceInspectorView: View {
           value: "\(model.collections.count)")
         InspectorFact(
           label: "Location ID", value: record.locationID.map { hex($0, width: 8) } ?? "—")
+        InspectorFact(
+          label: "bcdDevice",
+          value: record.versionNumber.map { hex($0, width: 4) } ?? "—")
       }
     }
     .studioPanel()
+  }
+
+  private var readOnlyReportProbe: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      HStack(alignment: .top, spacing: 14) {
+        VStack(alignment: .leading, spacing: 5) {
+          Text(studioText("읽기 전용 report 진단", "Read-only report probe", language: language))
+            .font(.headline)
+          Text(
+            studioText(
+              "현재 설정을 요청하는 명령은 보내지 않습니다. feature 64B와 LCD output 4096B를 직접 읽을 수 있는지만 확인합니다.",
+              "No current-settings query is sent. This only checks whether the 64-byte feature and 4096-byte LCD output reports can be read directly.",
+              language: language
+            )
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        }
+        Spacer()
+        Button {
+          model.runReadOnlyReportProbe()
+        } label: {
+          Label(
+            studioText("지금 읽기", "Read now", language: language),
+            systemImage: "arrow.down.doc"
+          )
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(StudioPalette.blue)
+        .disabled(!model.canRunReadOnlyReportProbe)
+      }
+
+      switch model.deviceReadProbeState {
+      case .idle:
+        Label(
+          studioText(
+            "자동으로 실행되지 않으며 원시 report를 파일에 저장하지 않습니다.",
+            "It never runs automatically and does not save raw reports to a file.",
+            language: language
+          ),
+          systemImage: "hand.tap"
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+      case .reading:
+        HStack(spacing: 10) {
+          ProgressView()
+          Text(studioText("두 collection을 읽는 중…", "Reading two collections…", language: language))
+        }
+        .font(.callout)
+      case .failed(let message):
+        Label(message, systemImage: "exclamationmark.triangle")
+          .font(.caption.monospaced())
+          .foregroundStyle(StudioPalette.coral)
+          .textSelection(.enabled)
+      case .ready(let snapshot):
+        probeResult(snapshot)
+      }
+    }
+    .studioPanel()
+  }
+
+  private func probeResult(_ snapshot: DeviceReadProbeSnapshot) -> some View {
+    VStack(alignment: .leading, spacing: 10) {
+      HStack(spacing: 10) {
+        Image(
+          systemName: snapshot.featureNonzeroByteCount == 0
+            ? "checkmark.circle"
+            : "info.circle"
+        )
+        .foregroundStyle(StudioPalette.mint)
+        Text(
+          studioText(
+            "Feature GET: \(snapshot.featureLength)B 성공 · 0이 아닌 byte \(snapshot.featureNonzeroByteCount)개",
+            "Feature GET: \(snapshot.featureLength) B · \(snapshot.featureNonzeroByteCount) nonzero bytes",
+            language: language
+          )
+        )
+        .font(.callout.monospacedDigit())
+      }
+
+      switch snapshot.bulkOutputResult {
+      case .read(let length, let nonzeroByteCount):
+        Label(
+          studioText(
+            "LCD output GET: \(length)B 성공 · 0이 아닌 byte \(nonzeroByteCount)개",
+            "LCD output GET: \(length) B · \(nonzeroByteCount) nonzero bytes",
+            language: language
+          ),
+          systemImage: "checkmark.circle"
+        )
+        .font(.callout.monospacedDigit())
+      case .unavailable(let message):
+        VStack(alignment: .leading, spacing: 3) {
+          Label(
+            studioText(
+              "LCD output GET은 장치가 제공하지 않습니다.",
+              "The device does not expose LCD output through GET_REPORT.",
+              language: language
+            ),
+            systemImage: "xmark.circle"
+          )
+          .font(.callout)
+          Text(message)
+            .font(.caption.monospaced())
+            .foregroundStyle(.secondary)
+            .textSelection(.enabled)
+        }
+      }
+
+      if snapshot.featureNonzeroByteCount == 0 {
+        Text(
+          studioText(
+            "직접 GET은 0으로 채워진 report만 반환했습니다. 현재 키맵·내장 모드 파라미터·일반 설정 백업에는 별도의 조회 명령이 필요하지만, 이 읽기 전용 진단은 selector 명령을 보내지 않습니다. 별도 F5 조회는 84키 RGB만 읽습니다.",
+            "A direct GET returned only zero-filled data. Backing up the current keymap, onboard-mode parameters, or general settings would require a separate query command, but this read-only probe sends no selector. The separate F5 query reads only the 84-key RGB buffer.",
+            language: language
+          )
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+      }
+    }
   }
 
   private var collectionList: some View {

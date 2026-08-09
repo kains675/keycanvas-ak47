@@ -13,6 +13,8 @@ final class ProfileModelsTests: XCTestCase {
     XCTAssertTrue(decoded.validationIssues().isEmpty)
     XCTAssertTrue(json.contains("\"key-code\""))
     XCTAssertTrue(json.contains("\"key-down\""))
+    XCTAssertTrue(json.contains("\"direction\" : 1"))
+    XCTAssertTrue(json.contains("\"colorful\" : true"))
   }
 
   func testJSONEncodingIsDeterministic() throws {
@@ -21,6 +23,36 @@ final class ProfileModelsTests: XCTestCase {
       try ProfileJSONCodec.encode(profile),
       try ProfileJSONCodec.encode(profile)
     )
+  }
+
+  func testLegacySchemaVersionOneJSONWithoutImportMetadataStillDecodes() throws {
+    let profile = makeValidProfile()
+    let legacyData = try JSONEncoder().encode(profile)
+    let legacyJSON = String(decoding: legacyData, as: UTF8.self)
+
+    XCTAssertFalse(legacyJSON.contains("importMetadata"))
+    let decoded = try ProfileJSONCodec.decode(legacyData)
+    XCTAssertNil(decoded.importMetadata)
+    XCTAssertNil(decoded.tft.assets[0].importMetadata)
+    XCTAssertEqual(decoded, profile)
+  }
+
+  func testLegacyLightingJSONWithoutDirectionAndColorfulUsesSafeDefaults() throws {
+    let profile = makeValidProfile()
+    let encoded = try JSONEncoder().encode(profile)
+    var root = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+    )
+    var lighting = try XCTUnwrap(root["lighting"] as? [String: Any])
+    lighting.removeValue(forKey: "direction")
+    lighting.removeValue(forKey: "colorful")
+    root["lighting"] = lighting
+    let legacyData = try JSONSerialization.data(withJSONObject: root)
+
+    let decoded = try ProfileJSONCodec.decode(legacyData)
+
+    XCTAssertEqual(decoded.lighting.direction, 0)
+    XCTAssertFalse(decoded.lighting.colorful)
   }
 
   func testValidationCollectsIssuesAcrossAllDomains() {
@@ -36,6 +68,7 @@ final class ProfileModelsTests: XCTestCase {
         effectIdentifier: " ",
         brightnessPercent: 101,
         speedPercent: -1,
+        direction: 2,
         perKey: [
           PerKeyLighting(
             position: -1, color: RGBColor(red: 0, green: 0, blue: 0), intensityPercent: 101)
@@ -85,6 +118,7 @@ final class ProfileModelsTests: XCTestCase {
     XCTAssertTrue(codes.contains("invalid-action"))
     XCTAssertTrue(codes.contains("invalid-effect"))
     XCTAssertTrue(codes.contains("invalid-percentage"))
+    XCTAssertTrue(codes.contains("invalid-lighting-direction"))
     XCTAssertTrue(codes.contains("duplicate-macro"))
     XCTAssertTrue(codes.contains("invalid-repeat-count"))
     XCTAssertTrue(codes.contains("unmatched-key-up"))
@@ -165,6 +199,8 @@ final class ProfileModelsTests: XCTestCase {
         effectIdentifier: "static",
         brightnessPercent: 80,
         speedPercent: 50,
+        direction: 1,
+        colorful: true,
         baseColor: RGBColor(red: 10, green: 20, blue: 30),
         accentColor: RGBColor(red: 40, green: 50, blue: 60),
         perKey: [

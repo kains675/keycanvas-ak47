@@ -20,8 +20,7 @@ final class HIDTransportTests: XCTestCase {
   func testDefaultGateDeniesConfigurationWriteWithoutForwarding() {
     let request = HIDTransportRequest.writeFeature(
       reportID: 0,
-      bytes: [1],
-      purpose: .configuration
+      bytes: [1]
     )
     let mock = MockHIDTransport()
     let gated = CapabilityGatedHIDTransport(underlying: mock)
@@ -32,76 +31,47 @@ final class HIDTransportTests: XCTestCase {
     XCTAssertTrue(mock.performedRequests.isEmpty)
   }
 
-  func testDefaultGateDeniesFirmwareWriteWithoutForwarding() {
+  func testDefaultGateDeniesOutputWriteWithoutForwarding() {
     let request = HIDTransportRequest.writeOutput(
       reportID: 0,
-      bytes: [1, 2],
-      purpose: .firmwareUpdate
+      bytes: [1, 2]
     )
     let mock = MockHIDTransport()
     let gated = CapabilityGatedHIDTransport(underlying: mock)
 
     XCTAssertThrowsError(try gated.perform(request)) { error in
-      XCTAssertEqual(error as? HIDTransportError, .capabilityDenied(.firmwareUpdate))
+      XCTAssertEqual(error as? HIDTransportError, .capabilityDenied(.configurationWrite))
     }
     XCTAssertTrue(mock.performedRequests.isEmpty)
   }
 
-  func testConfigurationGrantDoesNotImplicitlyGrantFirmware() throws {
-    let configuration = HIDTransportRequest.writeFeature(
+  func testConfigurationGrantAllowsFeatureAndOutputRequests() throws {
+    let feature = HIDTransportRequest.writeFeature(
       reportID: 0,
-      bytes: [1],
-      purpose: .configuration
+      bytes: [1]
     )
-    let firmware = HIDTransportRequest.writeOutput(
+    let output = HIDTransportRequest.writeOutput(
       reportID: 0,
-      bytes: [2],
-      purpose: .firmwareUpdate
+      bytes: [2]
     )
     let mock = MockHIDTransport(steps: [
       MockHIDTransportStep(
-        expectedRequest: configuration,
+        expectedRequest: feature,
         response: HIDTransportResponse()
-      )
+      ),
+      MockHIDTransportStep(
+        expectedRequest: output,
+        response: HIDTransportResponse()
+      ),
     ])
     let gated = CapabilityGatedHIDTransport(
       underlying: mock,
       policy: HIDCapabilityPolicy(allowConfigurationWrites: true)
     )
 
-    XCTAssertEqual(try gated.perform(configuration), HIDTransportResponse())
-    XCTAssertThrowsError(try gated.perform(firmware)) { error in
-      XCTAssertEqual(error as? HIDTransportError, .capabilityDenied(.firmwareUpdate))
-    }
-    XCTAssertEqual(mock.performedRequests, [configuration])
-  }
-
-  func testFirmwareGrantDoesNotImplicitlyGrantConfiguration() throws {
-    let firmware = HIDTransportRequest.writeOutput(
-      reportID: 0,
-      bytes: [2],
-      purpose: .firmwareUpdate
-    )
-    let mock = MockHIDTransport(steps: [
-      MockHIDTransportStep(
-        expectedRequest: firmware,
-        response: HIDTransportResponse()
-      )
-    ])
-    let gated = CapabilityGatedHIDTransport(
-      underlying: mock,
-      policy: HIDCapabilityPolicy(allowFirmwareUpdates: true)
-    )
-
-    XCTAssertEqual(try gated.perform(firmware), HIDTransportResponse())
-    let configuration = HIDTransportRequest.writeFeature(
-      reportID: 0,
-      bytes: [1],
-      purpose: .configuration
-    )
-    XCTAssertThrowsError(try gated.perform(configuration)) { error in
-      XCTAssertEqual(error as? HIDTransportError, .capabilityDenied(.configurationWrite))
-    }
+    XCTAssertEqual(try gated.perform(feature), HIDTransportResponse())
+    XCTAssertEqual(try gated.perform(output), HIDTransportResponse())
+    XCTAssertEqual(mock.performedRequests, [feature, output])
   }
 
   func testReadResponseLengthIsChecked() {
@@ -123,8 +93,7 @@ final class HIDTransportTests: XCTestCase {
   func testInvalidRequestIsRejectedBeforeForwarding() {
     let request = HIDTransportRequest.writeFeature(
       reportID: 0,
-      bytes: [UInt8](repeating: 0, count: 65),
-      purpose: .configuration
+      bytes: [UInt8](repeating: 0, count: 65)
     )
     let mock = MockHIDTransport()
     let gated = CapabilityGatedHIDTransport(

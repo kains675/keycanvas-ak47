@@ -46,10 +46,10 @@ struct DashboardView: View {
             tint: StudioPalette.violet
           )
           MetricTile(
-            title: studioText("장치 쓰기", "Device writes", language: language),
-            value: "0",
-            symbol: "lock.shield",
-            tint: StudioPalette.mint
+            title: studioText("장치 적용", "Device apply", language: language),
+            value: studioText("개별 확인", "Confirm each", language: language),
+            symbol: "hand.raised",
+            tint: StudioPalette.coral
           )
         }
 
@@ -116,8 +116,8 @@ struct DashboardView: View {
           .foregroundStyle(.secondary)
         Text(
           studioText(
-            "검사기는 속성만 읽습니다. 아래 구성 도구는 모두 미리보기입니다.",
-            "Inspector access is property-only. Configuration controls below are previews.",
+            "기본 검사는 읽기 전용입니다. 시계와 제한된 조명 적용은 정확한 유선 장치에서 작업별 확인 후에만 실행됩니다.",
+            "Normal inspection is read only. Clock and bounded lighting operations run only after per-operation confirmation on the exact wired device.",
             language: language
           )
         )

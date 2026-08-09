@@ -41,6 +41,7 @@ public enum HIDEnumerator {
       manufacturer: stringProperty(kIOHIDManufacturerKey, device: device),
       serialNumber: stringProperty(kIOHIDSerialNumberKey, device: device),
       transport: stringProperty(kIOHIDTransportKey, device: device),
+      versionNumber: numberProperty(kIOHIDVersionNumberKey, device: device),
       locationID: numberProperty(kIOHIDLocationIDKey, device: device),
       usagePage: numberProperty(kIOHIDPrimaryUsagePageKey, device: device),
       usage: numberProperty(kIOHIDPrimaryUsageKey, device: device),

@@ -101,6 +101,11 @@ public struct LightingProfile: Codable, Equatable, Sendable {
   public var effectIdentifier: String
   public var brightnessPercent: Int
   public var speedPercent: Int
+  /// Raw value used by the AK47 onboard-effect protocol. Only `0` and `1`
+  /// are valid; the selected effect determines whether the value is used.
+  public var direction: Int
+  /// Selects the firmware's colorful palette instead of its single RGB color.
+  public var colorful: Bool
   public var baseColor: RGBColor
   public var accentColor: RGBColor?
   public var perKey: [PerKeyLighting]
@@ -110,6 +115,8 @@ public struct LightingProfile: Codable, Equatable, Sendable {
     effectIdentifier: String = "static",
     brightnessPercent: Int = 100,
     speedPercent: Int = 50,
+    direction: Int = 0,
+    colorful: Bool = false,
     baseColor: RGBColor = RGBColor(red: 255, green: 255, blue: 255),
     accentColor: RGBColor? = nil,
     perKey: [PerKeyLighting] = []
@@ -118,9 +125,36 @@ public struct LightingProfile: Codable, Equatable, Sendable {
     self.effectIdentifier = effectIdentifier
     self.brightnessPercent = brightnessPercent
     self.speedPercent = speedPercent
+    self.direction = direction
+    self.colorful = colorful
     self.baseColor = baseColor
     self.accentColor = accentColor
     self.perKey = perKey
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case enabled
+    case effectIdentifier
+    case brightnessPercent
+    case speedPercent
+    case direction
+    case colorful
+    case baseColor
+    case accentColor
+    case perKey
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    enabled = try container.decode(Bool.self, forKey: .enabled)
+    effectIdentifier = try container.decode(String.self, forKey: .effectIdentifier)
+    brightnessPercent = try container.decode(Int.self, forKey: .brightnessPercent)
+    speedPercent = try container.decode(Int.self, forKey: .speedPercent)
+    direction = try container.decodeIfPresent(Int.self, forKey: .direction) ?? 0
+    colorful = try container.decodeIfPresent(Bool.self, forKey: .colorful) ?? false
+    baseColor = try container.decode(RGBColor.self, forKey: .baseColor)
+    accentColor = try container.decodeIfPresent(RGBColor.self, forKey: .accentColor)
+    perKey = try container.decode([PerKeyLighting].self, forKey: .perKey)
   }
 }
 
@@ -189,25 +223,47 @@ public struct MacroDefinition: Codable, Equatable, Sendable {
   }
 }
 
+public struct DisplayAssetImportMetadata: Codable, Equatable, Sendable {
+  public var sourceKind: String
+  public var sourceLayerIdentifier: Int
+  public var rawLayerType: Int?
+  public var frameDelaysMilliseconds: [Int]
+
+  public init(
+    sourceKind: String,
+    sourceLayerIdentifier: Int,
+    rawLayerType: Int? = nil,
+    frameDelaysMilliseconds: [Int] = []
+  ) {
+    self.sourceKind = sourceKind
+    self.sourceLayerIdentifier = sourceLayerIdentifier
+    self.rawLayerType = rawLayerType
+    self.frameDelaysMilliseconds = frameDelaysMilliseconds
+  }
+}
+
 public struct DisplayAssetReference: Codable, Equatable, Sendable {
   public var identifier: String
   public var resourceName: String
   public var width: Int
   public var height: Int
   public var frameCount: Int
+  public var importMetadata: DisplayAssetImportMetadata?
 
   public init(
     identifier: String,
     resourceName: String,
     width: Int,
     height: Int,
-    frameCount: Int = 1
+    frameCount: Int = 1,
+    importMetadata: DisplayAssetImportMetadata? = nil
   ) {
     self.identifier = identifier
     self.resourceName = resourceName
     self.width = width
     self.height = height
     self.frameCount = frameCount
+    self.importMetadata = importMetadata
   }
 }
 
@@ -270,6 +326,28 @@ public struct DeviceSettings: Codable, Equatable, Sendable {
   }
 }
 
+public struct ProfileImportMetadata: Codable, Equatable, Sendable {
+  public var sourceKind: String
+  public var importedAt: Date
+  public var sourceProfileWasActive: Bool
+  public var rawConfiguration: [String: String]
+  public var rawActiveLighting: [String: String]
+
+  public init(
+    sourceKind: String,
+    importedAt: Date,
+    sourceProfileWasActive: Bool,
+    rawConfiguration: [String: String] = [:],
+    rawActiveLighting: [String: String] = [:]
+  ) {
+    self.sourceKind = sourceKind
+    self.importedAt = importedAt
+    self.sourceProfileWasActive = sourceProfileWasActive
+    self.rawConfiguration = rawConfiguration
+    self.rawActiveLighting = rawActiveLighting
+  }
+}
+
 public struct DeviceProfile: Codable, Equatable, Sendable {
   public static let currentSchemaVersion = 1
 
@@ -281,6 +359,7 @@ public struct DeviceProfile: Codable, Equatable, Sendable {
   public var macros: [MacroDefinition]
   public var tft: TFTProfile
   public var settings: DeviceSettings
+  public var importMetadata: ProfileImportMetadata?
 
   public init(
     schemaVersion: Int = DeviceProfile.currentSchemaVersion,
@@ -290,7 +369,8 @@ public struct DeviceProfile: Codable, Equatable, Sendable {
     lighting: LightingProfile = LightingProfile(),
     macros: [MacroDefinition] = [],
     tft: TFTProfile = TFTProfile(),
-    settings: DeviceSettings = DeviceSettings()
+    settings: DeviceSettings = DeviceSettings(),
+    importMetadata: ProfileImportMetadata? = nil
   ) {
     self.schemaVersion = schemaVersion
     self.identifier = identifier
@@ -300,5 +380,6 @@ public struct DeviceProfile: Codable, Equatable, Sendable {
     self.macros = macros
     self.tft = tft
     self.settings = settings
+    self.importMetadata = importMetadata
   }
 }

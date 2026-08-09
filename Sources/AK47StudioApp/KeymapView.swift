@@ -127,7 +127,7 @@ struct KeymapView: View {
   }
 
   private func position(for key: String) -> Int {
-    Self.keyPositions.firstIndex(of: key) ?? 0
+    AK47PhysicalLayout.profilePosition(for: key) ?? 0
   }
 
   private func action(for assignment: String, selectedKey: String) -> KeyAction {
@@ -164,21 +164,6 @@ struct KeymapView: View {
     }
   }
 
-  private static let keyPositions = [
-    "Esc", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
-    "Print Screen", "Delete", "Home",
-    "Grave", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "Minus", "Equal", "Backspace",
-    "Page Up",
-    "Tab", "Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P", "Left Bracket", "Right Bracket",
-    "Backslash", "Page Down",
-    "Caps Lock", "A", "S", "D", "F", "G", "H", "J", "K", "L", "Semicolon", "Quote", "Return",
-    "Insert",
-    "Left Shift", "Z", "X", "C", "V", "B", "N", "M", "Comma", "Period", "Slash", "Right Shift",
-    "Up", "End",
-    "Left Control", "Left Option", "Left Command", "Space", "Right Option", "Fn", "Right Control",
-    "Left", "Down", "Right",
-  ]
-
   private static let hidKeyCodes: [String: UInt16] = [
     "A": 0x04, "B": 0x05, "C": 0x06, "D": 0x07, "E": 0x08, "F": 0x09,
     "G": 0x0A, "H": 0x0B, "I": 0x0C, "J": 0x0D, "K": 0x0E, "L": 0x0F,
@@ -192,12 +177,12 @@ struct KeymapView: View {
     "Comma": 0x36, "Period": 0x37, "Slash": 0x38, "Caps Lock": 0x39,
     "F1": 0x3A, "F2": 0x3B, "F3": 0x3C, "F4": 0x3D, "F5": 0x3E,
     "F6": 0x3F, "F7": 0x40, "F8": 0x41, "F9": 0x42, "F10": 0x43,
-    "F11": 0x44, "F12": 0x45, "Print Screen": 0x46, "Insert": 0x49,
+    "F11": 0x44, "F12": 0x45, "Insert": 0x49,
     "Home": 0x4A, "Page Up": 0x4B, "Delete": 0x4C, "End": 0x4D,
     "Page Down": 0x4E, "Right": 0x4F, "Left": 0x50, "Down": 0x51, "Up": 0x52,
     "Left Control": 0xE0, "Left Shift": 0xE1, "Left Option": 0xE2,
     "Left Command": 0xE3, "Right Control": 0xE4, "Right Shift": 0xE5,
-    "Right Option": 0xE6,
+    "Right Option": 0xE6, "Menu": 0x65,
   ]
 
   private static let consumerActions: [String: UInt16] = [
@@ -212,105 +197,52 @@ struct KeymapView: View {
   private static let assignmentOptions =
     ["No action"]
     + ["Play / Pause", "Previous Track", "Next Track", "Mute", "Volume Down", "Volume Up"]
-    + keyPositions.filter { hidKeyCodes[$0] != nil }
-}
-
-private struct KeyDraft: Identifiable {
-  let id: String
-  let label: String
-  var units: CGFloat = 1
+    + AK47PhysicalLayout.keyIDs.filter { hidKeyCodes[$0] != nil }
 }
 
 private struct KeyboardDraft: View {
   @Binding var selectedKey: String
 
-  private let rows: [[KeyDraft]] = [
-    [
-      KeyDraft(id: "Esc", label: "esc"), KeyDraft(id: "F1", label: "F1"),
-      KeyDraft(id: "F2", label: "F2"),
-      KeyDraft(id: "F3", label: "F3"), KeyDraft(id: "F4", label: "F4"),
-      KeyDraft(id: "F5", label: "F5"),
-      KeyDraft(id: "F6", label: "F6"), KeyDraft(id: "F7", label: "F7"),
-      KeyDraft(id: "F8", label: "F8"),
-      KeyDraft(id: "F9", label: "F9"), KeyDraft(id: "F10", label: "F10"),
-      KeyDraft(id: "F11", label: "F11"),
-      KeyDraft(id: "F12", label: "F12"), KeyDraft(id: "Print Screen", label: "print"),
-      KeyDraft(id: "Delete", label: "del"), KeyDraft(id: "Home", label: "home"),
-    ],
-    [
-      KeyDraft(id: "Grave", label: "`"), KeyDraft(id: "1", label: "1"),
-      KeyDraft(id: "2", label: "2"),
-      KeyDraft(id: "3", label: "3"), KeyDraft(id: "4", label: "4"), KeyDraft(id: "5", label: "5"),
-      KeyDraft(id: "6", label: "6"), KeyDraft(id: "7", label: "7"), KeyDraft(id: "8", label: "8"),
-      KeyDraft(id: "9", label: "9"), KeyDraft(id: "0", label: "0"),
-      KeyDraft(id: "Minus", label: "−"),
-      KeyDraft(id: "Equal", label: "="), KeyDraft(id: "Backspace", label: "delete", units: 2),
-      KeyDraft(id: "Page Up", label: "pg up"),
-    ],
-    [
-      KeyDraft(id: "Tab", label: "tab", units: 1.5), KeyDraft(id: "Q", label: "Q"),
-      KeyDraft(id: "W", label: "W"),
-      KeyDraft(id: "E", label: "E"), KeyDraft(id: "R", label: "R"), KeyDraft(id: "T", label: "T"),
-      KeyDraft(id: "Y", label: "Y"), KeyDraft(id: "U", label: "U"), KeyDraft(id: "I", label: "I"),
-      KeyDraft(id: "O", label: "O"), KeyDraft(id: "P", label: "P"),
-      KeyDraft(id: "Left Bracket", label: "["),
-      KeyDraft(id: "Right Bracket", label: "]"), KeyDraft(id: "Backslash", label: "\\", units: 1.5),
-      KeyDraft(id: "Page Down", label: "pg dn"),
-    ],
-    [
-      KeyDraft(id: "Caps Lock", label: "caps", units: 1.75), KeyDraft(id: "A", label: "A"),
-      KeyDraft(id: "S", label: "S"),
-      KeyDraft(id: "D", label: "D"), KeyDraft(id: "F", label: "F"), KeyDraft(id: "G", label: "G"),
-      KeyDraft(id: "H", label: "H"), KeyDraft(id: "J", label: "J"), KeyDraft(id: "K", label: "K"),
-      KeyDraft(id: "L", label: "L"), KeyDraft(id: "Semicolon", label: ";"),
-      KeyDraft(id: "Quote", label: "'"),
-      KeyDraft(id: "Return", label: "return", units: 2.25), KeyDraft(id: "Insert", label: "ins"),
-    ],
-    [
-      KeyDraft(id: "Left Shift", label: "shift", units: 2.25), KeyDraft(id: "Z", label: "Z"),
-      KeyDraft(id: "X", label: "X"),
-      KeyDraft(id: "C", label: "C"), KeyDraft(id: "V", label: "V"), KeyDraft(id: "B", label: "B"),
-      KeyDraft(id: "N", label: "N"), KeyDraft(id: "M", label: "M"),
-      KeyDraft(id: "Comma", label: ","),
-      KeyDraft(id: "Period", label: "."), KeyDraft(id: "Slash", label: "/"),
-      KeyDraft(id: "Right Shift", label: "shift", units: 1.75), KeyDraft(id: "Up", label: "↑"),
-      KeyDraft(id: "End", label: "end"),
-    ],
-    [
-      KeyDraft(id: "Left Control", label: "ctrl", units: 1.25),
-      KeyDraft(id: "Left Option", label: "opt", units: 1.25),
-      KeyDraft(id: "Left Command", label: "cmd", units: 1.25),
-      KeyDraft(id: "Space", label: "space", units: 5),
-      KeyDraft(id: "Right Option", label: "opt", units: 1.25), KeyDraft(id: "Fn", label: "fn"),
-      KeyDraft(id: "Right Control", label: "ctrl", units: 1.25), KeyDraft(id: "Left", label: "←"),
-      KeyDraft(id: "Down", label: "↓"), KeyDraft(id: "Right", label: "→"),
-    ],
-  ]
-
   var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
+    VStack(alignment: .leading, spacing: 16) {
       HStack {
         KeyCanvasMark(size: 28)
-        Text("LAYOUT STUDY")
-          .font(.caption.weight(.bold))
-          .tracking(1.4)
-          .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 1) {
+          Text("AK47 · 84 KEY")
+            .font(.caption.weight(.bold))
+            .tracking(1.2)
+          Text("PHYSICAL LAYOUT")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+        }
         Spacer()
-        StatusPill(label: "Local draft", symbol: "pencil", tint: StudioPalette.violet)
+        StatusPill(label: "240×135 LCD · KNOB", symbol: "dial.medium", tint: StudioPalette.violet)
       }
-      .padding(.bottom, 12)
 
-      ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-        HStack(spacing: 8) {
-          ForEach(row) { key in
-            KeycapButton(key: key, isSelected: selectedKey == key.id) {
-              selectedKey = key.id
-            }
+      ZStack(alignment: .topLeading) {
+        indicatorDots
+          .offset(x: 50, y: 5)
+
+        displayPlaceholder
+          .offset(x: AK47PhysicalLayout.lcdFrame.minX, y: AK47PhysicalLayout.lcdFrame.minY)
+
+        knobPlaceholder
+          .offset(x: AK47PhysicalLayout.knobFrame.minX, y: AK47PhysicalLayout.knobFrame.minY)
+
+        ForEach(AK47PhysicalLayout.keys) { key in
+          KeycapButton(key: key, isSelected: selectedKey == key.id) {
+            selectedKey = key.id
           }
+          .offset(x: key.x, y: key.y)
         }
       }
+      .frame(
+        width: AK47PhysicalLayout.canvasSize.width,
+        height: AK47PhysicalLayout.canvasSize.height,
+        alignment: .topLeading
+      )
     }
-    .padding(22)
+    .padding(20)
     .background(
       StudioPalette.ink.opacity(0.94), in: RoundedRectangle(cornerRadius: 24, style: .continuous)
     )
@@ -319,28 +251,82 @@ private struct KeyboardDraft: View {
         .strokeBorder(Color.white.opacity(0.08))
     }
   }
+
+  private var indicatorDots: some View {
+    VStack(spacing: 4) {
+      ForEach(0..<3, id: \.self) { _ in
+        Circle()
+          .fill(Color.white.opacity(0.34))
+          .frame(width: 5, height: 5)
+      }
+    }
+  }
+
+  private var displayPlaceholder: some View {
+    RoundedRectangle(cornerRadius: 7, style: .continuous)
+      .fill(
+        LinearGradient(
+          colors: [StudioPalette.blue.opacity(0.38), StudioPalette.violet.opacity(0.24)],
+          startPoint: .topLeading,
+          endPoint: .bottomTrailing
+        )
+      )
+      .frame(width: 70, height: 32)
+      .overlay {
+        Text("LCD")
+          .font(.system(size: 8, weight: .bold, design: .rounded))
+          .tracking(1)
+          .foregroundStyle(Color.white.opacity(0.72))
+      }
+      .overlay {
+        RoundedRectangle(cornerRadius: 7, style: .continuous)
+          .strokeBorder(Color.white.opacity(0.12))
+      }
+      .accessibilityLabel("240 by 135 LCD")
+  }
+
+  private var knobPlaceholder: some View {
+    Circle()
+      .fill(Color.white.opacity(0.11))
+      .frame(width: 32, height: 32)
+      .overlay {
+        Circle()
+          .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+          .padding(2)
+      }
+      .overlay(alignment: .top) {
+        Capsule()
+          .fill(Color.white.opacity(0.42))
+          .frame(width: 2, height: 7)
+          .padding(.top, 5)
+      }
+      .accessibilityLabel("Rotary knob")
+  }
 }
 
 private struct KeycapButton: View {
-  let key: KeyDraft
+  let key: AK47PhysicalKey
   let isSelected: Bool
   let action: () -> Void
 
   var body: some View {
     Button(action: action) {
       Text(key.label)
-        .font(.caption.weight(.semibold))
+        .font(.system(size: key.width <= 32 ? 8.5 : 9, weight: .semibold, design: .rounded))
+        .lineLimit(1)
+        .minimumScaleFactor(0.62)
         .foregroundStyle(isSelected ? Color.white : Color.white.opacity(0.78))
-        .frame(width: 46 * key.units + 8 * (key.units - 1), height: 44)
+        .frame(width: key.width, height: key.height)
         .background(
           isSelected ? StudioPalette.blue : Color.white.opacity(0.08),
-          in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+          in: RoundedRectangle(cornerRadius: 7, style: .continuous)
         )
         .overlay {
-          RoundedRectangle(cornerRadius: 9, style: .continuous)
+          RoundedRectangle(cornerRadius: 7, style: .continuous)
             .strokeBorder(Color.white.opacity(isSelected ? 0.28 : 0.10))
         }
     }
     .buttonStyle(.plain)
+    .accessibilityLabel(key.id)
   }
 }

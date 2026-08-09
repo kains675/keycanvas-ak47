@@ -3,64 +3,92 @@ import SwiftUI
 struct StudioRootView: View {
   @ObservedObject var model: StudioModel
   @AppStorage("inspectorRefreshesAtLaunch") private var inspectorRefreshesAtLaunch = true
+  @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
   var body: some View {
-    NavigationSplitView {
-      List(StudioSection.allCases, selection: $model.selection) { section in
-        NavigationLink(value: section) {
-          SidebarRow(section: section, language: model.language)
+    GeometryReader { geometry in
+      Group {
+        if geometry.size.width < NavigationLayout.compactWidth {
+          NavigationStack {
+            detailContainer(usesCompactNavigation: true)
+          }
+        } else {
+          NavigationSplitView(columnVisibility: $columnVisibility) {
+            sidebar
+          } detail: {
+            detailContainer(usesCompactNavigation: false)
+          }
+          .navigationSplitViewStyle(.balanced)
+          .onAppear {
+            columnVisibility = .all
+          }
         }
       }
-      .navigationTitle("KeyCanvas")
-      .navigationSplitViewColumnWidth(min: 220, ideal: 245, max: 290)
-      .safeAreaInset(edge: .bottom) {
-        VStack(spacing: 10) {
-          Divider()
-          DemoNotice(compact: true)
+      .task {
+        if inspectorRefreshesAtLaunch, model.inspectorState == .idle {
+          model.refreshInspector()
         }
-        .padding(.horizontal, 10)
-        .padding(.bottom, 8)
-        .background(.regularMaterial)
       }
-    } detail: {
-      detailView
-        .environment(\.studioLanguage, model.language)
-        .background {
-          LinearGradient(
-            colors: [
-              StudioPalette.blue.opacity(0.035),
-              Color.clear,
-              StudioPalette.mint.opacity(0.025),
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
+      .onChange(of: model.selection) { selection in
+        UserDefaults.standard.set(selection.rawValue, forKey: "lastStudioSection")
+      }
+      .onChange(of: model.language) { language in
+        UserDefaults.standard.set(language.rawValue, forKey: "appLanguage")
+      }
+    }
+  }
+
+  private var sidebar: some View {
+    List(StudioSection.allCases, selection: $model.selection) { section in
+      NavigationLink(value: section) {
+        SidebarRow(section: section, language: model.language)
+      }
+    }
+    .navigationTitle("KeyCanvas")
+    .navigationSplitViewColumnWidth(min: 220, ideal: 245, max: 290)
+    .safeAreaInset(edge: .bottom) {
+      VStack(spacing: 10) {
+        Divider()
+        DemoNotice(compact: true)
+      }
+      .padding(.horizontal, 10)
+      .padding(.bottom, 8)
+      .background(.regularMaterial)
+    }
+  }
+
+  private func detailContainer(usesCompactNavigation: Bool) -> some View {
+    detailView
+      .environment(\.studioLanguage, model.language)
+      .background {
+        LinearGradient(
+          colors: [
+            StudioPalette.blue.opacity(0.035),
+            Color.clear,
+            StudioPalette.mint.opacity(0.025),
+          ],
+          startPoint: .topLeading,
+          endPoint: .bottomTrailing
+        )
+        .ignoresSafeArea()
+      }
+      .toolbar {
+        if usesCompactNavigation {
+          ToolbarItem(placement: .navigation) {
+            CompactNavigationMenu(model: model)
+          }
+        }
+        ToolbarItem {
+          ProfileToolbarMenu(store: model.profileStore, language: model.language)
+        }
+        ToolbarItem(placement: .primaryAction) {
+          StatusPill(
+            label: model.connectionLabel(in: model.language),
+            symbol: model.isConnected ? "checkmark.circle.fill" : "circle.dashed",
+            tint: model.isConnected ? StudioPalette.mint : StudioPalette.muted
           )
-          .ignoresSafeArea()
         }
-        .toolbar {
-          ToolbarItem {
-            ProfileToolbarMenu(store: model.profileStore, language: model.language)
-          }
-          ToolbarItem(placement: .primaryAction) {
-            StatusPill(
-              label: model.connectionLabel(in: model.language),
-              symbol: model.isConnected ? "checkmark.circle.fill" : "circle.dashed",
-              tint: model.isConnected ? StudioPalette.mint : StudioPalette.muted
-            )
-          }
-        }
-    }
-    .task {
-      if inspectorRefreshesAtLaunch, model.inspectorState == .idle {
-        model.refreshInspector()
       }
-    }
-    .onChange(of: model.selection) { selection in
-      UserDefaults.standard.set(selection.rawValue, forKey: "lastStudioSection")
-    }
-    .onChange(of: model.language) { language in
-      UserDefaults.standard.set(language.rawValue, forKey: "appLanguage")
-    }
   }
 
   @ViewBuilder
@@ -71,7 +99,7 @@ struct StudioRootView: View {
     case .keymap:
       KeymapView(profileStore: model.profileStore)
     case .lighting:
-      LightingView(profileStore: model.profileStore)
+      LightingView(model: model)
     case .macros:
       MacrosView(profileStore: model.profileStore)
     case .display:
@@ -81,6 +109,36 @@ struct StudioRootView: View {
     case .deviceInspector:
       DeviceInspectorView(model: model)
     }
+  }
+}
+
+private enum NavigationLayout {
+  static let compactWidth: CGFloat = 1_120
+}
+
+private struct CompactNavigationMenu: View {
+  @ObservedObject var model: StudioModel
+
+  var body: some View {
+    Menu {
+      ForEach(StudioSection.allCases) { section in
+        Button {
+          model.selection = section
+        } label: {
+          Label {
+            Text(section.title(in: model.language))
+          } icon: {
+            Image(systemName: model.selection == section ? "checkmark" : section.symbol)
+          }
+        }
+      }
+    } label: {
+      Label(
+        model.selection.title(in: model.language),
+        systemImage: model.selection.symbol
+      )
+    }
+    .help(studioText("화면 이동", "Navigate", language: model.language))
   }
 }
 
@@ -124,7 +182,7 @@ private struct ProfileToolbarMenu: View {
     } label: {
       Label(store.selectedProfile.name, systemImage: "folder")
     }
-    .help(store.statusLabel)
+    .help(store.statusLabel(in: language))
   }
 }
 

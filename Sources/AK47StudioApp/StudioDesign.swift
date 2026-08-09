@@ -187,8 +187,8 @@ struct DemoNotice: View {
             if !compact {
               Text(
                 studioText(
-                  "편집 내용은 로컬 프로필에만 저장되며 키보드로 전송되지 않습니다.",
-                  "Edits stay in a local profile and are never sent to the keyboard.",
+                  "편집과 저장만으로는 전송되지 않습니다. 지원되는 장치 작업은 해당 적용 버튼과 별도 확인을 거친 경우에만 한 번 실행됩니다.",
+                  "Editing and saving never transmit data. A supported device operation runs once only after its apply button and separate confirmation.",
                   language: language
                 )
               )

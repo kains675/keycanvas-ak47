@@ -5,6 +5,7 @@ public struct HIDCollectionRecord: Codable, Equatable, Sendable {
   public let manufacturer: String?
   public let serialNumber: String?
   public let transport: String?
+  public let versionNumber: UInt64?
   public let locationID: UInt64?
   public let usagePage: UInt64?
   public let usage: UInt64?
@@ -20,6 +21,7 @@ public struct HIDCollectionRecord: Codable, Equatable, Sendable {
     manufacturer: String?,
     serialNumber: String? = nil,
     transport: String?,
+    versionNumber: UInt64? = nil,
     locationID: UInt64?,
     usagePage: UInt64?,
     usage: UInt64?,
@@ -33,6 +35,7 @@ public struct HIDCollectionRecord: Codable, Equatable, Sendable {
     self.manufacturer = manufacturer
     self.serialNumber = serialNumber
     self.transport = transport
+    self.versionNumber = versionNumber
     self.locationID = locationID
     self.usagePage = usagePage
     self.usage = usage

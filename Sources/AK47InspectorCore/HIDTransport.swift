@@ -1,31 +1,18 @@
 import Foundation
 
-public enum HIDWritePurpose: String, Codable, Equatable, Sendable {
-  case configuration
-  case firmwareUpdate = "firmware-update"
-}
-
 public enum HIDCapability: String, Codable, Hashable, Sendable {
   case inspect
   case configurationWrite = "configuration-write"
-  case firmwareUpdate = "firmware-update"
 }
 
 public struct HIDCapabilityPolicy: Equatable, Sendable {
   public let allowed: Set<HIDCapability>
 
-  /// Creates a read-only policy. Write and firmware capabilities must be granted
-  /// explicitly by constructing a policy with the corresponding flags enabled.
-  public init(
-    allowConfigurationWrites: Bool = false,
-    allowFirmwareUpdates: Bool = false
-  ) {
+  /// Creates a read-only policy. Configuration writes must be granted explicitly.
+  public init(allowConfigurationWrites: Bool = false) {
     var capabilities: Set<HIDCapability> = [.inspect]
     if allowConfigurationWrites {
       capabilities.insert(.configurationWrite)
-    }
-    if allowFirmwareUpdates {
-      capabilities.insert(.firmwareUpdate)
     }
     self.allowed = capabilities
   }
@@ -39,18 +26,15 @@ public struct HIDCapabilityPolicy: Equatable, Sendable {
 
 public enum HIDTransportRequest: Equatable, Sendable {
   case readFeature(reportID: UInt8, expectedLength: Int)
-  case writeFeature(reportID: UInt8, bytes: [UInt8], purpose: HIDWritePurpose)
-  case writeOutput(reportID: UInt8, bytes: [UInt8], purpose: HIDWritePurpose)
+  case writeFeature(reportID: UInt8, bytes: [UInt8])
+  case writeOutput(reportID: UInt8, bytes: [UInt8])
 
   public var requiredCapability: HIDCapability {
     switch self {
     case .readFeature:
       return .inspect
-    case .writeFeature(_, _, let purpose), .writeOutput(_, _, let purpose):
-      switch purpose {
-      case .configuration: return .configurationWrite
-      case .firmwareUpdate: return .firmwareUpdate
-      }
+    case .writeFeature, .writeOutput:
+      return .configurationWrite
     }
   }
 
@@ -62,13 +46,13 @@ public enum HIDTransportRequest: Equatable, Sendable {
           "feature read length must be between 1 and 64 bytes"
         )
       }
-    case .writeFeature(_, let bytes, _):
+    case .writeFeature(_, let bytes):
       guard !bytes.isEmpty, bytes.count <= 64 else {
         throw HIDTransportError.invalidRequest(
           "feature write must contain between 1 and 64 bytes"
         )
       }
-    case .writeOutput(_, let bytes, _):
+    case .writeOutput(_, let bytes):
       guard !bytes.isEmpty, bytes.count <= 4_096 else {
         throw HIDTransportError.invalidRequest(
           "output write must contain between 1 and 4096 bytes"

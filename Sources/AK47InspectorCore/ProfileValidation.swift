@@ -48,6 +48,7 @@ extension DeviceProfile {
     validateLighting(lighting, issues: &issues)
     validateTFT(tft, issues: &issues)
     validateSettings(settings, issues: &issues)
+    validateImportMetadata(importMetadata, issues: &issues)
     return issues
   }
 
@@ -165,6 +166,14 @@ private func validateLighting(
     path: "lighting.speedPercent",
     issues: &issues
   )
+  if !(0...1).contains(lighting.direction) {
+    issues.append(
+      issue(
+        "invalid-lighting-direction",
+        "lighting.direction",
+        "direction must be raw value 0 or 1"
+      ))
+  }
 
   var positions: Set<Int> = []
   for (index, item) in lighting.perKey.enumerated() {
@@ -310,6 +319,38 @@ private func validateTFT(
           "frame count must be between 1 and 10000"
         ))
     }
+    if let metadata = asset.importMetadata {
+      validateSourceKind(
+        metadata.sourceKind,
+        path: "\(path).importMetadata.sourceKind",
+        issues: &issues
+      )
+      if !(1...1_000_000).contains(metadata.sourceLayerIdentifier) {
+        issues.append(
+          issue(
+            "invalid-source-layer",
+            "\(path).importMetadata.sourceLayerIdentifier",
+            "source layer identifier must be between 1 and 1000000"
+          ))
+      }
+      if metadata.frameDelaysMilliseconds.count != asset.frameCount {
+        issues.append(
+          issue(
+            "invalid-frame-delays",
+            "\(path).importMetadata.frameDelaysMilliseconds",
+            "one frame delay is required for every imported frame"
+          ))
+      }
+      for (delayIndex, delay) in metadata.frameDelaysMilliseconds.enumerated()
+      where !(1...60_000).contains(delay) {
+        issues.append(
+          issue(
+            "invalid-frame-delay",
+            "\(path).importMetadata.frameDelaysMilliseconds[\(delayIndex)]",
+            "frame delay must be between 1 and 60000 milliseconds"
+          ))
+      }
+    }
   }
 
   for (index, identifier) in tft.playlist.enumerated() where !identifiers.contains(identifier) {
@@ -319,6 +360,60 @@ private func validateTFT(
         "tft.playlist[\(index)]",
         "referenced asset does not exist"
       ))
+  }
+}
+
+private func validateImportMetadata(
+  _ metadata: ProfileImportMetadata?,
+  issues: inout [ProfileValidationIssue]
+) {
+  guard let metadata else { return }
+  validateSourceKind(metadata.sourceKind, path: "importMetadata.sourceKind", issues: &issues)
+  validateRawMetadata(
+    metadata.rawConfiguration,
+    path: "importMetadata.rawConfiguration",
+    issues: &issues
+  )
+  validateRawMetadata(
+    metadata.rawActiveLighting,
+    path: "importMetadata.rawActiveLighting",
+    issues: &issues
+  )
+}
+
+private func validateSourceKind(
+  _ value: String,
+  path: String,
+  issues: inout [ProfileValidationIssue]
+) {
+  let clean = normalized(value)
+  if clean.isEmpty || clean.count > 64 {
+    issues.append(
+      issue(
+        "invalid-import-source",
+        path,
+        "import source must contain between 1 and 64 non-whitespace characters"
+      ))
+  }
+}
+
+private func validateRawMetadata(
+  _ values: [String: String],
+  path: String,
+  issues: inout [ProfileValidationIssue]
+) {
+  if values.count > 128 {
+    issues.append(issue("too-much-import-metadata", path, "at most 128 raw values are allowed"))
+  }
+  for (key, value) in values {
+    if normalized(key).isEmpty || key.count > 64 || value.count > 256 {
+      issues.append(
+        issue(
+          "invalid-import-metadata",
+          "\(path).\(key)",
+          "raw metadata keys and values exceed their safe bounds"
+        ))
+    }
   }
 }
 
