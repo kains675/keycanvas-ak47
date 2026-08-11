@@ -19,6 +19,10 @@
   trim timeline, an independent playhead, fixed `HH:MM:SS.mmm` timecodes and
   keyboard output-sample stepping. Selected-range playback stops at the active
   end boundary, and stale seek or replaced-boundary callbacks are ignored.
+- Fixed a Swift exclusivity crash when a completed video extraction dismissed
+  the trimmer while its hidden keyboard responder was being dismantled. Route
+  publication now occurs on the next MainActor turn, after SwiftUI graph
+  teardown, with a 133-frame/14-fps extraction regression.
 - Simplified the main Display surface to Import → edit → Apply and moved the
   existing library/study and device qualification/recovery tools into collapsed
   secondary sections.

@@ -104,6 +104,33 @@ final class LocalVideoTrimKeyboardRouteTests: XCTestCase {
 
     responder.invalidate()
   }
+
+  func testInvalidateDefersPublishedDetachUntilAfterDismantleTurn() async {
+    let route = LocalVideoTrimKeyboardRoute()
+    let responder = LocalVideoTrimKeyResponderView(route: route)
+    let window = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 100, height: 100),
+      styleMask: .borderless,
+      backing: .buffered,
+      defer: false
+    )
+    window.contentView = responder
+    route.attach(responder)
+    route.configure(isEnabled: true) { _, _, _ in }
+    route.activate(.endHandle)
+    XCTAssertTrue(window.firstResponder === responder)
+
+    responder.invalidate()
+
+    XCTAssertEqual(route.activeControl, .endHandle)
+    XCTAssertNil(responder.route)
+    XCTAssertFalse(window.firstResponder === responder)
+
+    await Task.yield()
+
+    XCTAssertNil(route.activeControl)
+    XCTAssertFalse(route.route(.forward))
+  }
 }
 
 @MainActor

@@ -36,7 +36,9 @@ final class LocalVideoTrimKeyboardRoute: ObservableObject {
     guard focusRequester === requester else { return }
     requester.releaseLocalVideoTrimKeyFocus()
     focusRequester = nil
-    activeControl = nil
+    if activeControl != nil {
+      activeControl = nil
+    }
     stepHandler = nil
   }
 
@@ -47,7 +49,9 @@ final class LocalVideoTrimKeyboardRoute: ObservableObject {
   }
 
   func deactivate() {
-    activeControl = nil
+    if activeControl != nil {
+      activeControl = nil
+    }
     focusRequester?.releaseLocalVideoTrimKeyFocus()
   }
 
@@ -60,12 +64,14 @@ final class LocalVideoTrimKeyboardRoute: ObservableObject {
 
   func responderDidResign(_ requester: LocalVideoTrimFocusRequester) {
     guard focusRequester === requester else { return }
-    activeControl = nil
+    if activeControl != nil {
+      activeControl = nil
+    }
   }
 }
 
 struct LocalVideoTrimKeyResponder: NSViewRepresentable {
-  @ObservedObject var route: LocalVideoTrimKeyboardRoute
+  let route: LocalVideoTrimKeyboardRoute
   let isEnabled: Bool
   let onStep: LocalVideoTrimKeyboardRoute.StepHandler
 
@@ -168,8 +174,19 @@ final class LocalVideoTrimKeyResponderView: NSView, LocalVideoTrimFocusRequester
   }
 
   func invalidate() {
-    route?.detach(self)
+    guard let attachedRoute = route else { return }
     route = nil
+    isRoutingEnabled = false
+    releaseLocalVideoTrimKeyFocus()
+    let requester = self
+
+    // SwiftUI dismantles representable views while its AttributeGraph is in
+    // an exclusive mutation. Publishing `activeControl` from that callback
+    // traps in Swift's exclusivity runtime, so detach on the next MainActor
+    // turn after graph teardown has completed.
+    Task { @MainActor [weak attachedRoute, requester] in
+      attachedRoute?.detach(requester)
+    }
   }
 
   static func direction(

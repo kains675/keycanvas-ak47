@@ -132,6 +132,35 @@ final class LocalVideoImportServiceTests: XCTestCase {
     XCTAssertGreaterThan(second.red, second.blue + 80)
   }
 
+  func testExtracts133FramesAt14FPSWithoutTruncation() async throws {
+    let frameTimes = (0..<286).map {
+      CMTime(value: CMTimeValue($0), timescale: 30)
+    }
+    let fixture = try await makeMovieFixture(
+      frameTimes: frameTimes,
+      endTime: CMTime(value: 286, timescale: 30),
+      transform: .identity
+    )
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+    let descriptor = try await LocalVideoImportService.inspect(url: fixture.url)
+    let selection = try AK47LCDVideoSelection(
+      startMilliseconds: 0,
+      endMilliseconds: 9_500,
+      framesPerSecond: 14
+    )
+    let result = try await LocalVideoImportService.extract(
+      descriptor: descriptor,
+      selection: selection
+    )
+
+    XCTAssertEqual(result.plan.expectedFrameCount, 133)
+    XCTAssertEqual(result.decodedSource.frames.count, 133)
+    XCTAssertEqual(result.plan.samples.first?.timestampMilliseconds, 0)
+    XCTAssertEqual(result.plan.samples.last?.timestampMilliseconds, 9_428)
+    XCTAssertEqual(result.plan.samples.last?.delayMilliseconds, 72)
+  }
+
   func testUntrustedFloatingPointDimensionsFailBeforeIntegerConversion() throws {
     XCTAssertThrowsError(
       try LocalVideoImportService.validatedBoundedDimensions(width: 1e100, height: 1)
