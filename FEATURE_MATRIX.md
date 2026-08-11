@@ -1,6 +1,6 @@
 # KeyCanvas 기능 매트릭스
 
-이 문서는 ARCHON AK47 non-PRO용 Windows 설정 도구에서 사용자가 접할 수 있는
+이 문서는 ARCHON AK47용 Windows 설정 도구에서 사용자가 접할 수 있는
 기능 범주와 현재 KeyCanvas 구현 범위를 비교한 개발 목록입니다. 비교 대상의
 기능명과 동작 범위만 독립적인 문장으로 요약했습니다. 일부 최소 기능 사실은
 합법적으로 보유한 로컬 환경의 interoperability 분석에서 얻어 독립적으로 다시

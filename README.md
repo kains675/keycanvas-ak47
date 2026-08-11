@@ -2,13 +2,13 @@
 
 <img src="Artwork/keycanvas-mark.svg" alt="KeyCanvas 앱 마크" width="160">
 
-ARCHON AK47 non-PRO를 macOS에서 설정하기 위한 비공식 오픈소스 앱입니다.
+ARCHON AK47 (프로 버전 아닙니다!!)를 macOS에서도 쓰기 위해 제 필요로 만든 비공식 오픈소스 앱입니다.
 
-> **현재 프로그램은 실험적 기능임에 따라 장치 이상, 고장이 발생 할 수 있음을 인지하고 있습니다.**
+공식 프로그램이 아니므로 고장이 발생 할 수 있으며, 개발자는 발생하는 상황에 어떠한 책임도 지지 않습니다.
 
 ## 경고
 
-1. KeyCanvas는 제조사 공식 프로그램이 아닌 개인 개발 실험판이며, 확인된 ARCHON AK47 non-PRO 유선 USB 장치에서만 제한적으로 동작합니다.
+1. KeyCanvas는 제조사 공식 프로그램이 아닌 개인 개발 실험판이며, 확인된 ARCHON AK47 유선 USB 장치에서만 제한적으로 동작합니다.
 2. 장치의 현재 설정과 LCD 내용을 완전히 읽거나 백업·자동 복원·롤백할 수 없으며, 오류나 전원·연결 중단으로 데이터가 손상될 수 있습니다.
 3. 장치에 적용하기 전 제조사 프로그램, Windows 가상 머신과 다른 USB/HID 도구를 모두 종료하고 화면의 확인 절차를 끝까지 따라야 합니다.
 
@@ -25,7 +25,7 @@ ARCHON AK47 non-PRO를 macOS에서 설정하기 위한 비공식 오픈소스 �
 
 ### 키보드 연결 기능
 
-- 유선 ARCHON AK47 non-PRO (`0x0C45:0x800A`, revision `0x0115`) 연결 확인
+- 유선 ARCHON AK47 (`0x0C45:0x800A`, revision `0x0115`) 연결 확인
 - 현재 84키 RGB 조회, Mac 시각 동기화
 - 선택한 내장 조명 효과와 완성된 84키 RGB 적용
 - 앱의 장치 확인 절차를 완료한 동일 키보드에 1–140프레임 LCD 이미지·애니메이션 적용
@@ -36,4 +36,4 @@ ARCHON AK47 non-PRO를 macOS에서 설정하기 위한 비공식 오픈소스 �
 
 ## 라이선스
 
-KeyCanvas가 독자적으로 작성한 코드와 문서는 [MIT License](LICENSE)로 배포합니다.
+KeyCanvas는 [MIT License](https://github.com/kains675/keycanvas-ak47/blob/main/LICENSE)입니다. 자유롭게 사용 해 주세요.
