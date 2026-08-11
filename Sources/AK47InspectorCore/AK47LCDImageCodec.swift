@@ -92,6 +92,25 @@ public enum AK47LCDGIFDecoder {
     // immutable snapshot. This prevents a path/symlink swap between validation
     // and ImageIO reopening the source.
     let sourceData = try readBoundedRegularFile(url: url)
+    return try decode(
+      data: sourceData,
+      fallbackDelayMilliseconds: fallbackDelayMilliseconds
+    )
+  }
+
+  /// Decodes an already captured immutable GIF snapshot. Importers that also
+  /// retain the original encoded bytes use this overload so the editor and its
+  /// local library copy are guaranteed to describe the exact same file.
+  public static func decode(
+    data sourceData: Data,
+    fallbackDelayMilliseconds: Int? = nil
+  ) throws -> AK47LCDDecodedGIF {
+    guard !sourceData.isEmpty else { throw AK47LCDImageCodecError.invalidGIF }
+    guard sourceData.count <= AK47LCDFormat.maximumCompressedGIFByteCount else {
+      throw AK47LCDImageCodecError.sourceFileTooLarge(
+        maximumBytes: AK47LCDFormat.maximumCompressedGIFByteCount
+      )
+    }
     if let fallbackDelayMilliseconds {
       _ = try AK47LCDSourceDelay(milliseconds: fallbackDelayMilliseconds)
     }
@@ -204,7 +223,7 @@ public enum AK47LCDGIFDecoder {
   private static func readBoundedRegularFile(url: URL) throws -> Data {
     let descriptor = url.withUnsafeFileSystemRepresentation { path -> Int32 in
       guard let path else { return -1 }
-      return Darwin.open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+      return Darwin.open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK)
     }
     guard descriptor >= 0 else {
       throw AK47LCDImageCodecError.notLocalRegularFile

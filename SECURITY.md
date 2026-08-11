@@ -124,8 +124,8 @@ selector to 2.4G/Bluetooth is likewise not recovery.
 
 ## Display editor and bounded LCD transport boundary
 
-The GIF editor and RGB565 container encoder operate on bounded local files.
-They produce full composited 240×135 frames, a 256-byte header and exact
+The inline Display editor and RGB565 container encoder operate on bounded local
+image, GIF and movie input. They produce full composited 240×135 frames, a 256-byte header and exact
 4,096-byte `0xFF`-padded pages. Structurally valid output is not proof of a safe
 hardware transfer.
 
@@ -213,8 +213,22 @@ bootloader operations.
 
 ## Local-file and trace boundaries
 
-Treat imported profiles, images, GIFs and traces as untrusted. Image import and
-decoding enforce regular-file, size, dimension, frame-count and work limits.
+Treat imported profiles, images, GIFs, movies and traces as untrusted. Image and
+GIF import uses a nonblocking no-follow descriptor, verifies a regular file,
+decodes one bounded immutable byte snapshot and stores those exact bytes. Movie
+import uses the same source checks, a 1 GiB source ceiling, a private local
+snapshot and `forbidAll` media-reference restrictions. It checks every video
+track and coded/oriented dimensions before extraction, limits source geometry
+to 8,192 pixels per axis and 33,554,432 pixels, then applies the common
+2,048-axis, 2-megapixel-per-frame, 32-megapixel-total and 140-frame retained
+work limits. Network download and remote media references are unsupported.
+
+Video inspection and extraction expose bounded caller deadlines and suppress
+late progress or commits after cancellation. AVFoundation or a filesystem read
+that never returns cannot be force-terminated in-process; a timed-out
+underlying task may finish later, but its result cannot enter the editor. Media
+replacement is bound to its originating profile/session and disables editor
+mutation and device Apply until the immutable result commits or is cancelled.
 Keep private images and imported Windows data out of bug reports unless a
 minimal project-authored reproduction can replace them.
 

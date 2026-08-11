@@ -4,6 +4,16 @@ import ImageIO
 import SwiftUI
 import UniformTypeIdentifiers
 
+private enum DisplayEditorReplacementAction {
+  case chooseFile
+  case libraryAsset(DisplayAssetReference)
+}
+
+private struct DisplayImportSession: Equatable {
+  let id = UUID()
+  let profileIdentifier: String
+}
+
 struct DisplayComposerView: View {
   @Environment(\.studioLanguage) private var language
   @ObservedObject var model: StudioModel
@@ -23,6 +33,17 @@ struct DisplayComposerView: View {
   @State private var previewIsPlaying = false
   @State private var playbackRevision = 0
   @State private var animationEditorInput: DisplayAnimationEditorInput?
+  @State private var animationEditorDraftState: DisplayAnimationEditorDraftState?
+  @State private var videoClipSelectionInput: LocalVideoClipSelectionInput?
+  @State private var videoSecurityScopedURL: URL?
+  @State private var videoSecurityScopeIsActive = false
+  @State private var isInspectingImport = false
+  @State private var importInspectionTask: Task<Void, Never>?
+  @State private var activeImportSession: DisplayImportSession?
+  @State private var pendingReplacementAction: DisplayEditorReplacementAction?
+  @State private var showsReplacementConfirmation = false
+  @State private var showsLibraryAndStudy = false
+  @State private var showsDeviceRecovery = false
   @State private var qualifiedVisualReviewSnapshot: LCDQualifiedAnimationSnapshot?
   @State private var assetMessage: String?
   @State private var assetMessageIsError = false
@@ -39,21 +60,244 @@ struct DisplayComposerView: View {
           eyebrow: studioText("240 × 135 시안", "240 × 135 study", language: language),
           title: studioText("디스플레이", "Display", language: language),
           detail: studioText(
-            "이미지와 GIF는 로컬에서 편집합니다. 고정 1프레임 진단과 영속 복구 자격을 새 build에서 모두 마친 경우에만 현재 editor snapshot을 최대 40프레임까지 별도 확인 후 적용할 수 있습니다.",
-            "Edit images and GIFs locally. Only after a fresh fixed one-frame diagnostic and complete durable recovery qualification may the current editor snapshot be applied, with separate confirmation, up to 40 frames.",
+            "이미지·GIF·로컬 영상을 불러와 실제 240×135 화면에서 바로 편집합니다. 장치 적용은 검증된 자격과 별도 exact-plan 확인을 계속 요구합니다.",
+            "Import images, GIFs, or local videos and edit them directly on the actual 240×135 canvas. Device Apply still requires verified qualification and separate exact-plan confirmation.",
             language: language
           )
         )
 
+        primaryEditor
+        libraryAndStudyDisclosure
+        deviceRecoveryDisclosure
+      }
+      .padding(28)
+      .frame(maxWidth: 1060)
+      .frame(maxWidth: .infinity, alignment: .top)
+    }
+    .onAppear(perform: loadProfile)
+    .onChange(of: profileStore.selectedID) { _ in
+      cancelActiveImportSession()
+      loadProfile()
+    }
+    .onChange(of: theme) { _ in savedLocally = false }
+    .onChange(of: accent) { _ in savedLocally = false }
+    .onChange(of: showClock) { _ in savedLocally = false }
+    .onChange(of: showBattery) { _ in savedLocally = false }
+    .onChange(of: selectedAssetID) { _ in loadAssetPreview() }
+    .onChange(of: note) { newValue in
+      if newValue.count > 128 {
+        note = String(newValue.prefix(128))
+      }
+      savedLocally = false
+    }
+    .task(id: playbackTaskID) {
+      await playSelectedAsset()
+    }
+    .onDisappear {
+      previewIsPlaying = false
+      cancelActiveImportSession()
+    }
+    .sheet(
+      item: $videoClipSelectionInput,
+      onDismiss: {
+        cancelActiveImportSession()
+        releaseVideoSecurityScope()
+      }
+    ) { input in
+      LocalVideoClipSelectionView(input: input) { result in
+        guard let session = activeImportSession,
+          canCommitImportSession(session)
+        else {
+          videoClipSelectionInput = nil
+          return
+        }
+        animationEditorInput = DisplayAnimationEditorInput(
+          sourceURL: result.descriptor.sourceURL,
+          displayName: result.descriptor.sourceURL.lastPathComponent,
+          fallbackDelayMilliseconds: fallbackFrameDelayMilliseconds,
+          preparedDecodedSource: result.decodedSource,
+          preparedSourceRequiresExport: true
+        )
+        animationEditorDraftState = nil
+        finishImportSession(session)
+        videoClipSelectionInput = nil
+      }
+      .environment(\.studioLanguage, language)
+    }
+    .sheet(item: $qualifiedVisualReviewSnapshot) { snapshot in
+      LCDQualifiedUploadVisualReviewSheet(
+        snapshot: snapshot,
+        canConfirmCorrect: model.canConfirmQualifiedLCDAnimationVisualResult,
+        canReportMismatch: model.canReportQualifiedLCDAnimationVisualMismatch,
+        onConfirmCorrect: {
+          if model.recordQualifiedLCDAnimationVisualResult() {
+            qualifiedVisualReviewSnapshot = nil
+          }
+        },
+        onReportMismatch: {
+          if model.reportQualifiedLCDAnimationVisualMismatch() {
+            qualifiedVisualReviewSnapshot = nil
+          }
+        }
+      )
+      .environment(\.studioLanguage, language)
+    }
+    .confirmationDialog(
+      studioText(
+        "현재 편집 초안을 바꿀까요?",
+        "Replace the current editing draft?",
+        language: language
+      ),
+      isPresented: $showsReplacementConfirmation,
+      titleVisibility: .visible
+    ) {
+      Button(
+        studioText("현재 초안을 버리고 계속", "Discard current draft and continue", language: language),
+        role: .destructive
+      ) {
+        performPendingReplacementAction()
+      }
+      Button(studioText("취소", "Cancel", language: language), role: .cancel) {
+        pendingReplacementAction = nil
+      }
+    } message: {
+      Text(
+        studioText(
+          "내보내지 않은 편집, 적용하지 않은 크롭, 메모리에만 있는 영상 구간 프레임이 사라질 수 있습니다. 새 파일은 확인 후에만 불러옵니다.",
+          "Unexported edits, unapplied crop settings, and video-range frames held only in memory may be lost. A new file is chosen only after this confirmation.",
+          language: language
+        )
+      )
+    }
+  }
+
+  private var primaryEditor: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      HStack(alignment: .center, spacing: 12) {
+        VStack(alignment: .leading, spacing: 3) {
+          Text(studioText("불러오기 → 편집 → 적용", "Import → edit → Apply", language: language))
+            .font(.headline)
+          Text(
+            studioText(
+              "원본은 바꾸지 않고, 장치에 저장될 240×135 결과를 같은 화면에서 확인합니다.",
+              "The source stays unchanged while the same screen shows the 240×135 result stored on the device.",
+              language: language
+            )
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        }
+        Spacer()
+        if isInspectingImport {
+          ProgressView()
+            .controlSize(.small)
+        }
+        Button(action: requestUnifiedImport) {
+          Label(
+            studioText("불러오기…", "Import…", language: language),
+            systemImage: "square.and.arrow.down"
+          )
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(StudioPalette.blue)
+        .disabled(isInspectingImport || animationEditorDraftState?.isBusy == true)
+      }
+
+      if let input = animationEditorInput {
+        DisplayAnimationEditorView(
+          input: input,
+          studioModel: model,
+          presentation: .embedded,
+          onDraftStateChange: { state in
+            animationEditorDraftState = state
+          }
+        )
+        .environment(\.studioLanguage, language)
+        .disabled(editorReplacementInProgress)
+      } else {
+        VStack(spacing: 16) {
+          ZStack {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+              .fill(Color.black)
+            Image(systemName: "photo.on.rectangle.angled")
+              .font(.system(size: 42, weight: .light))
+              .foregroundStyle(StudioPalette.mint.opacity(0.85))
+          }
+          .aspectRatio(240.0 / 135.0, contentMode: .fit)
+          .frame(maxWidth: 640)
+          .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+              .strokeBorder(Color.white.opacity(0.12))
+          }
+          Text(
+            studioText(
+              "PNG·JPEG·GIF·MP4·MOV·M4V를 선택하면 이 자리에 편집기가 열립니다.",
+              "Choose a PNG, JPEG, GIF, MP4, MOV, or M4V file to open the editor here.",
+              language: language
+            )
+          )
+          .font(.callout)
+          .foregroundStyle(.secondary)
+          Button(action: requestUnifiedImport) {
+            Label(
+              studioText("불러오기…", "Import…", language: language),
+              systemImage: "plus"
+            )
+          }
+          .buttonStyle(.borderedProminent)
+          .tint(StudioPalette.blue)
+          .disabled(isInspectingImport)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(22)
+        .studioPanel()
+      }
+
+      if let assetMessage {
+        Label(
+          assetMessage,
+          systemImage: assetMessageIsError ? "exclamationmark.triangle" : "checkmark.circle"
+        )
+        .font(.caption)
+        .foregroundStyle(assetMessageIsError ? StudioPalette.coral : StudioPalette.mint)
+      }
+    }
+  }
+
+  private var libraryAndStudyDisclosure: some View {
+    DisclosureGroup(isExpanded: $showsLibraryAndStudy) {
+      VStack(alignment: .leading, spacing: 18) {
         HStack(alignment: .top, spacing: 20) {
           displayPreview
             .frame(maxWidth: .infinity)
           displayControls
             .frame(width: 300)
         }
-
         assetLibrary
+        HStack(spacing: 14) {
+          DisplayPreset(
+            name: "Orbit", colors: [StudioPalette.ink, StudioPalette.mint], selection: $theme)
+          DisplayPreset(
+            name: "Horizon", colors: [StudioPalette.blue, StudioPalette.coral], selection: $theme)
+          DisplayPreset(name: "Mono", colors: [.black, .gray], selection: $theme)
+        }
+        DemoNotice()
+      }
+      .padding(.top, 16)
+    } label: {
+      Label(
+        studioText("보관함·재생 목록·디스플레이 시안", "Library, playlist & display study", language: language),
+        systemImage: "rectangle.stack"
+      )
+      .font(.headline)
+    }
+    .studioPanel()
+    .disabled(editorReplacementInProgress)
+  }
 
+  private var deviceRecoveryDisclosure: some View {
+    DisclosureGroup(isExpanded: $showsDeviceRecovery) {
+      VStack(alignment: .leading, spacing: 18) {
         LCDExperimentalTransferCard(
           adapterLinked: true,
           exactTargetReady: model.hasVerifiedLCDDiagnosticTarget,
@@ -91,62 +335,18 @@ struct DisplayComposerView: View {
             _ = model.reconcileInterruptedLCDTransfer()
           }
         )
-
-        HStack(spacing: 14) {
-          DisplayPreset(
-            name: "Orbit", colors: [StudioPalette.ink, StudioPalette.mint], selection: $theme)
-          DisplayPreset(
-            name: "Horizon", colors: [StudioPalette.blue, StudioPalette.coral], selection: $theme)
-          DisplayPreset(name: "Mono", colors: [.black, .gray], selection: $theme)
-        }
-
-        DemoNotice()
       }
-      .padding(28)
-      .frame(maxWidth: 1060)
-      .frame(maxWidth: .infinity, alignment: .top)
-    }
-    .onAppear(perform: loadProfile)
-    .onChange(of: profileStore.selectedID) { _ in loadProfile() }
-    .onChange(of: theme) { _ in savedLocally = false }
-    .onChange(of: accent) { _ in savedLocally = false }
-    .onChange(of: showClock) { _ in savedLocally = false }
-    .onChange(of: showBattery) { _ in savedLocally = false }
-    .onChange(of: selectedAssetID) { _ in loadAssetPreview() }
-    .onChange(of: note) { newValue in
-      if newValue.count > 128 {
-        note = String(newValue.prefix(128))
-      }
-      savedLocally = false
-    }
-    .task(id: playbackTaskID) {
-      await playSelectedAsset()
-    }
-    .onDisappear {
-      previewIsPlaying = false
-    }
-    .sheet(item: $animationEditorInput) { input in
-      DisplayAnimationEditorView(input: input, studioModel: model)
-        .environment(\.studioLanguage, language)
-    }
-    .sheet(item: $qualifiedVisualReviewSnapshot) { snapshot in
-      LCDQualifiedUploadVisualReviewSheet(
-        snapshot: snapshot,
-        canConfirmCorrect: model.canConfirmQualifiedLCDAnimationVisualResult,
-        canReportMismatch: model.canReportQualifiedLCDAnimationVisualMismatch,
-        onConfirmCorrect: {
-          if model.recordQualifiedLCDAnimationVisualResult() {
-            qualifiedVisualReviewSnapshot = nil
-          }
-        },
-        onReportMismatch: {
-          if model.reportQualifiedLCDAnimationVisualMismatch() {
-            qualifiedVisualReviewSnapshot = nil
-          }
-        }
+      .padding(.top, 16)
+    } label: {
+      Label(
+        studioText(
+          "장치 실험·자격·복구", "Device experiments, qualification & recovery", language: language),
+        systemImage: "wrench.and.screwdriver"
       )
-      .environment(\.studioLanguage, language)
+      .font(.headline)
     }
+    .studioPanel()
+    .disabled(editorReplacementInProgress)
   }
 
   private var displayPreview: some View {
@@ -392,12 +592,12 @@ struct DisplayComposerView: View {
     VStack(alignment: .leading, spacing: 16) {
       HStack(alignment: .top) {
         VStack(alignment: .leading, spacing: 4) {
-          Text(studioText("로컬 이미지 보관함", "Local image library", language: language))
+          Text(studioText("로컬 미디어 보관함", "Local media library", language: language))
             .font(.headline)
           Text(
             studioText(
-              "PNG, JPEG, GIF를 앱 전용 폴더에 복사하고 프로필 재생 목록에 연결합니다.",
-              "Copy PNG, JPEG, or GIF files into app storage and link them to the profile playlist.",
+              "PNG·JPEG·GIF는 앱 전용 폴더와 재생 목록에 보관합니다. 영상 원본은 복사하지 않고 편집기로 바로 열며, 결과는 GIF로 내보내야 보존됩니다.",
+              "PNG, JPEG, and GIF files are kept in app storage and the playlist. Video sources open directly in the editor without being copied; export a GIF to preserve the result.",
               language: language
             )
           )
@@ -405,11 +605,12 @@ struct DisplayComposerView: View {
           .foregroundStyle(.secondary)
         }
         Spacer()
-        Button(action: importDisplayAsset) {
-          Label(studioText("이미지 가져오기…", "Import image…", language: language), systemImage: "plus")
+        Button(action: requestUnifiedImport) {
+          Label(studioText("불러오기…", "Import…", language: language), systemImage: "plus")
         }
         .buttonStyle(.borderedProminent)
         .tint(StudioPalette.blue)
+        .disabled(isInspectingImport || animationEditorDraftState?.isBusy == true)
       }
 
       if assets.isEmpty {
@@ -546,18 +747,19 @@ struct DisplayComposerView: View {
             }
             .buttonStyle(.bordered)
           }
-          if selectedAsset.resourceName.lowercased().hasSuffix(".gif") {
-            Button {
-              openAnimationEditor(for: selectedAsset)
-            } label: {
-              Label(
-                studioText("GIF 편집…", "Edit GIF…", language: language),
-                systemImage: "slider.horizontal.3"
-              )
-            }
-            .buttonStyle(.bordered)
-            .disabled(profileStore.displayAssetURL(for: selectedAsset) == nil)
+          Button {
+            requestOpenAnimationEditor(for: selectedAsset)
+          } label: {
+            Label(
+              studioText("편집…", "Edit…", language: language),
+              systemImage: "slider.horizontal.3"
+            )
           }
+          .buttonStyle(.bordered)
+          .disabled(
+            profileStore.displayAssetURL(for: selectedAsset) == nil
+              || animationEditorDraftState?.isBusy == true
+          )
           Button(action: exportSelectedAsset) {
             Label(
               studioText("복사본 내보내기…", "Export copy…", language: language),
@@ -652,64 +854,250 @@ struct DisplayComposerView: View {
     )
   }
 
-  private func importDisplayAsset() {
+  private var editorReplacementInProgress: Bool {
+    isInspectingImport || videoClipSelectionInput != nil || activeImportSession != nil
+  }
+
+  private func requestUnifiedImport() {
+    requestReplacement(.chooseFile)
+  }
+
+  private func requestOpenAnimationEditor(for asset: DisplayAssetReference) {
+    requestReplacement(.libraryAsset(asset))
+  }
+
+  private func requestReplacement(_ action: DisplayEditorReplacementAction) {
+    switch DisplayEditorReplacementPolicy.decision(
+      hasEditorInput: animationEditorInput != nil,
+      draftState: animationEditorDraftState,
+      replacementInProgress: editorReplacementInProgress
+    ) {
+    case .blocked:
+      return
+    case .confirmDiscard:
+      pendingReplacementAction = action
+      showsReplacementConfirmation = true
+    case .proceed:
+      pendingReplacementAction = action
+      performPendingReplacementAction()
+    }
+  }
+
+  private func performPendingReplacementAction() {
+    guard let action = pendingReplacementAction else { return }
+    guard animationEditorDraftState?.isBusy != true, !editorReplacementInProgress else {
+      pendingReplacementAction = nil
+      return
+    }
+    pendingReplacementAction = nil
+    switch action {
+    case .chooseFile:
+      presentUnifiedImportPanel()
+    case .libraryAsset(let asset):
+      openAnimationEditor(for: asset)
+    }
+  }
+
+  @discardableResult
+  private func beginImportSession() -> DisplayImportSession {
+    importInspectionTask?.cancel()
+    let session = DisplayImportSession(profileIdentifier: profileStore.selectedID)
+    activeImportSession = session
+    isInspectingImport = true
+    return session
+  }
+
+  private func canCommitImportSession(_ session: DisplayImportSession) -> Bool {
+    activeImportSession == session
+      && profileStore.selectedID == session.profileIdentifier
+      && !Task.isCancelled
+  }
+
+  private func finishImportInspection(
+    _ session: DisplayImportSession,
+    preservingVideoSelection: Bool
+  ) {
+    guard activeImportSession == session else { return }
+    importInspectionTask = nil
+    isInspectingImport = false
+    if !preservingVideoSelection {
+      activeImportSession = nil
+    }
+  }
+
+  private func finishImportSession(_ session: DisplayImportSession) {
+    guard activeImportSession == session else { return }
+    importInspectionTask = nil
+    activeImportSession = nil
+    isInspectingImport = false
+  }
+
+  private func cancelActiveImportSession() {
+    importInspectionTask?.cancel()
+    importInspectionTask = nil
+    activeImportSession = nil
+    isInspectingImport = false
+    videoClipSelectionInput = nil
+    releaseVideoSecurityScope()
+  }
+
+  private func presentUnifiedImportPanel() {
     let panel = NSOpenPanel()
-    panel.title = studioText("로컬 디스플레이 이미지 선택", "Choose a local display image", language: language)
-    panel.prompt = studioText("가져오기", "Import", language: language)
-    panel.allowedContentTypes = [.png, .jpeg, .gif]
+    panel.title = studioText(
+      "이미지·GIF 또는 영상 선택",
+      "Choose an image, GIF, or video",
+      language: language
+    )
+    panel.prompt = studioText("불러오기", "Import", language: language)
+    panel.allowedContentTypes = [.png, .jpeg, .gif, .movie]
     panel.allowsMultipleSelection = false
     panel.canChooseDirectories = false
 
     guard panel.runModal() == .OK, let sourceURL = panel.url else { return }
     let accessedSecurityScope = sourceURL.startAccessingSecurityScopedResource()
-    defer {
-      if accessedSecurityScope {
-        sourceURL.stopAccessingSecurityScopedResource()
-      }
+    let contentType =
+      (try? sourceURL.resourceValues(forKeys: [.contentTypeKey]).contentType)
+      ?? UTType(filenameExtension: sourceURL.pathExtension)
+    if contentType?.conforms(to: .movie) == true {
+      beginVideoSelection(
+        sourceURL: sourceURL,
+        accessedSecurityScope: accessedSecurityScope
+      )
+    } else {
+      importLocalImage(
+        sourceURL: sourceURL,
+        accessedSecurityScope: accessedSecurityScope
+      )
     }
+  }
 
-    do {
-      let inspection = try DisplayAssetInspection.inspect(
-        sourceURL,
-        fallbackDelayMilliseconds: fallbackFrameDelayMilliseconds
-      )
-      profileStore.updateTFT(currentTFTDraft)
-      let reference = try profileStore.copyDisplayAsset(
-        from: sourceURL,
-        preferredFilenameExtension: inspection.preferredFilenameExtension,
-        pixelWidth: inspection.pixelWidth,
-        pixelHeight: inspection.pixelHeight,
-        frameCount: inspection.frameCount
-      )
-      selectedAssetID = reference.identifier
-      profileStore.saveSelected()
-
-      if case .saved = profileStore.status {
-        savedLocally = true
-        assetMessageIsError = false
-        assetMessage = studioText(
-          "앱 전용 폴더에 복사하고 프로필에 저장했습니다.",
-          "Copied into app storage and saved in the profile.",
-          language: language
+  private func importLocalImage(
+    sourceURL: URL,
+    accessedSecurityScope: Bool
+  ) {
+    let session = beginImportSession()
+    let fallback = fallbackFrameDelayMilliseconds
+    importInspectionTask = Task { @MainActor in
+      defer {
+        finishImportSession(session)
+        if accessedSecurityScope {
+          sourceURL.stopAccessingSecurityScopedResource()
+        }
+      }
+      do {
+        let loaderTask = Task.detached(priority: .userInitiated) {
+          try LocalDisplayEditorSourceLoader.inspect(
+            url: sourceURL,
+            fallbackDelayMilliseconds: fallback
+          )
+        }
+        defer { loaderTask.cancel() }
+        let inspection = try await withTaskCancellationHandler {
+          try await loaderTask.value
+        } onCancel: {
+          loaderTask.cancel()
+        }
+        try Task.checkCancellation()
+        guard canCommitImportSession(session) else { throw CancellationError() }
+        profileStore.updateTFT(currentTFTDraft)
+        let decoded = inspection.decodedSource
+        let reference = try profileStore.storeDisplayAsset(
+          snapshotData: inspection.sourceData,
+          originalFilename: sourceURL.lastPathComponent,
+          preferredFilenameExtension: inspection.preferredFilenameExtension,
+          pixelWidth: decoded.sourceWidth,
+          pixelHeight: decoded.sourceHeight,
+          frameCount: decoded.frames.count
         )
-      } else {
+        selectedAssetID = reference.identifier
+        profileStore.saveSelected()
+        guard let storedURL = profileStore.displayAssetURL(for: reference) else {
+          throw DisplayAssetInspectionError.invalidImage
+        }
+        animationEditorInput = DisplayAnimationEditorInput(
+          sourceURL: storedURL,
+          displayName: URL(fileURLWithPath: reference.resourceName).lastPathComponent,
+          fallbackDelayMilliseconds: fallback,
+          preparedDecodedSource: decoded
+        )
+        animationEditorDraftState = nil
+
+        if case .saved = profileStore.status {
+          savedLocally = true
+          assetMessageIsError = false
+          assetMessage = studioText(
+            "앱 전용 폴더에 복사하고 편집기를 열었습니다.",
+            "Copied into app storage and opened in the editor.",
+            language: language
+          )
+        } else {
+          savedLocally = false
+          assetMessageIsError = true
+          assetMessage = studioText(
+            "로컬 복사본과 편집기는 열었지만 프로필 저장을 완료하지 못했습니다.",
+            "The local copy and editor are ready, but the profile could not be saved.",
+            language: language
+          )
+        }
+      } catch is CancellationError {
+        return
+      } catch {
+        guard canCommitImportSession(session) else { return }
         savedLocally = false
         assetMessageIsError = true
         assetMessage = studioText(
-          "로컬 복사본은 만들었지만 프로필 저장을 완료하지 못했습니다.",
-          "The local copy was created, but the profile could not be saved.",
+          "지원되는 로컬 이미지·GIF를 불러오지 못했습니다: \(error.localizedDescription)",
+          "Could not import the supported local image or GIF: \(error.localizedDescription)",
           language: language
         )
       }
-    } catch {
-      savedLocally = false
-      assetMessageIsError = true
-      assetMessage = studioText(
-        "지원되는 로컬 이미지를 가져오지 못했습니다.",
-        "The supported local image could not be imported.",
-        language: language
-      )
     }
+  }
+
+  private func beginVideoSelection(
+    sourceURL: URL,
+    accessedSecurityScope: Bool
+  ) {
+    releaseVideoSecurityScope()
+    videoSecurityScopedURL = sourceURL
+    videoSecurityScopeIsActive = accessedSecurityScope
+    let session = beginImportSession()
+    importInspectionTask = Task { @MainActor in
+      var didPresentSelection = false
+      defer {
+        releaseVideoSecurityScope()
+        finishImportInspection(
+          session,
+          preservingVideoSelection: didPresentSelection
+        )
+      }
+      do {
+        let descriptor = try await LocalVideoImportService.inspect(url: sourceURL)
+        try Task.checkCancellation()
+        guard canCommitImportSession(session) else { throw CancellationError() }
+        videoClipSelectionInput = LocalVideoClipSelectionInput(descriptor: descriptor)
+        didPresentSelection = true
+        assetMessage = nil
+      } catch is CancellationError {
+        return
+      } catch {
+        guard canCommitImportSession(session) else { return }
+        assetMessageIsError = true
+        assetMessage = studioText(
+          "로컬 영상을 열지 못했습니다: \(error.localizedDescription)",
+          "Could not open the local video: \(error.localizedDescription)",
+          language: language
+        )
+      }
+    }
+  }
+
+  private func releaseVideoSecurityScope() {
+    if videoSecurityScopeIsActive, let videoSecurityScopedURL {
+      videoSecurityScopedURL.stopAccessingSecurityScopedResource()
+    }
+    videoSecurityScopedURL = nil
+    videoSecurityScopeIsActive = false
   }
 
   private func exportSelectedAsset() {
@@ -751,11 +1139,50 @@ struct DisplayComposerView: View {
 
   private func openAnimationEditor(for asset: DisplayAssetReference) {
     guard let sourceURL = profileStore.displayAssetURL(for: asset) else { return }
-    animationEditorInput = DisplayAnimationEditorInput(
-      sourceURL: sourceURL,
-      displayName: URL(fileURLWithPath: asset.resourceName).lastPathComponent,
-      fallbackDelayMilliseconds: fallbackFrameDelayMilliseconds
-    )
+    let session = beginImportSession()
+    let fallback = fallbackFrameDelayMilliseconds
+    importInspectionTask = Task { @MainActor in
+      defer { finishImportSession(session) }
+      do {
+        let loaderTask = Task.detached(priority: .userInitiated) {
+          try LocalDisplayEditorSourceLoader.load(
+            url: sourceURL,
+            fallbackDelayMilliseconds: fallback
+          )
+        }
+        defer { loaderTask.cancel() }
+        let decoded = try await withTaskCancellationHandler {
+          try await loaderTask.value
+        } onCancel: {
+          loaderTask.cancel()
+        }
+        try Task.checkCancellation()
+        guard canCommitImportSession(session) else { throw CancellationError() }
+        animationEditorInput = DisplayAnimationEditorInput(
+          sourceURL: sourceURL,
+          displayName: URL(fileURLWithPath: asset.resourceName).lastPathComponent,
+          fallbackDelayMilliseconds: fallback,
+          preparedDecodedSource: decoded
+        )
+        animationEditorDraftState = nil
+        assetMessageIsError = false
+        assetMessage = studioText(
+          "선택한 보관함 항목을 편집기에서 열었습니다.",
+          "Opened the selected library item in the editor.",
+          language: language
+        )
+      } catch is CancellationError {
+        return
+      } catch {
+        guard canCommitImportSession(session) else { return }
+        assetMessageIsError = true
+        assetMessage = studioText(
+          "선택한 보관함 항목을 편집기로 열지 못했습니다: \(error.localizedDescription)",
+          "Could not open the selected library item in the editor: \(error.localizedDescription)",
+          language: language
+        )
+      }
+    }
   }
 
   private func movePlaylistItem(from sourceIndex: Int, by offset: Int) {

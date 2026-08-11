@@ -5,6 +5,23 @@
 - Added a bounded offline GIF editor with frame add/delete/duplicate/reorder,
   per-frame delay, crop/fit/fill/stretch, project-authored bitmap text and pen
   editing, animated preview, and edited-GIF export.
+- Made the visible editor output canvas match the LCD's exact 240×135 (16:9)
+  aspect ratio. Fit, fill/crop and stretch now update a non-destructive live
+  output preview; aspect fill adds a whole-source crop map plus centered X/Y
+  1-pixel and 10-pixel arrow nudges, and requires an explicit all-source-frame
+  apply before export or device transfer.
+- Unified Display import around one inline editor. PNG/JPEG/GIF sources open
+  directly; local AVFoundation-readable MP4/MOV/M4V sources use a bounded
+  start/end/FPS sampler before entering the same fit/fill/crop/text/pen flow.
+  Video sources are snapshotted locally, forbid external media references,
+  stay out of the asset library, and require edited-GIF export for retention.
+- Simplified the main Display surface to Import → edit → Apply and moved the
+  existing library/study and device qualification/recovery tools into collapsed
+  secondary sections.
+- Bound local media replacement to the originating profile/session, stored the
+  exact image/GIF bytes that were inspected, rejected symlinks/FIFOs through
+  no-follow nonblocking regular-file reads, and disabled editor mutation and
+  device Apply while an immutable import is being prepared.
 - Added an independent 240×135 opaque RGB565 container encoder with a 256-byte
   header, exact 4,096-byte `0xFF`-padded pages, verified delay conversion, and
   rejection of malformed or over-ceiling projects. The 140-frame/2,215-page

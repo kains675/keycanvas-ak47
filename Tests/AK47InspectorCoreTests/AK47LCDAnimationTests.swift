@@ -1,9 +1,26 @@
+import Darwin
 import Foundation
 import XCTest
 
 @testable import AK47InspectorCore
 
 final class AK47LCDAnimationTests: XCTestCase {
+  func testGIFDecoderRejectsFIFOWithoutBlockingOnOpen() throws {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let fifo = directory.appendingPathComponent("source.gif")
+    let result = fifo.withUnsafeFileSystemRepresentation { path in
+      Darwin.mkfifo(path, S_IRUSR | S_IWUSR)
+    }
+    XCTAssertEqual(result, 0)
+
+    XCTAssertThrowsError(try AK47LCDGIFDecoder.decode(url: fifo)) { error in
+      XCTAssertEqual(error as? AK47LCDImageCodecError, .notLocalRegularFile)
+    }
+  }
+
   func testProjectAddsDuplicatesMovesRemovesAndEditsDelay() throws {
     let firstID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
     let secondID = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!

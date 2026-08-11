@@ -129,8 +129,13 @@ final class LocalProfileStore: ObservableObject {
     setSelectedStatus(.unsaved)
   }
 
-  func copyDisplayAsset(
-    from sourceURL: URL,
+  /// Stores the exact immutable bytes already inspected by the media loader.
+  /// This avoids reopening a user-controlled path after decoding, where a
+  /// rename or swap could otherwise make the library copy differ from the
+  /// prepared editor source.
+  func storeDisplayAsset(
+    snapshotData: Data,
+    originalFilename: String,
     preferredFilenameExtension: String,
     pixelWidth: Int,
     pixelHeight: Int,
@@ -139,15 +144,10 @@ final class LocalProfileStore: ObservableObject {
     guard let index = selectedIndex else {
       throw ProfileStoreError.missingProfile
     }
-
-    let values = try sourceURL.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
-    guard values.isRegularFile == true,
-      let byteCount = values.fileSize,
-      byteCount <= LocalDisplayAssetLimits.maximumByteCount
-    else {
-      throw ProfileStoreError.invalidDisplayAsset
-    }
-    guard (1...8_192).contains(pixelWidth), (1...8_192).contains(pixelHeight),
+    guard !snapshotData.isEmpty,
+      snapshotData.count <= LocalDisplayAssetLimits.maximumByteCount,
+      (1...8_192).contains(pixelWidth),
+      (1...8_192).contains(pixelHeight),
       (1...10_000).contains(frameCount)
     else {
       throw ProfileStoreError.invalidDisplayAsset
@@ -159,6 +159,7 @@ final class LocalProfileStore: ObservableObject {
     }
 
     let identifier = UUID().uuidString.lowercased()
+    let sourceURL = URL(fileURLWithPath: originalFilename)
     let sourceStem = safeFilename(for: sourceURL.deletingPathExtension().lastPathComponent)
     let stem = String(sourceStem.prefix(48))
     let filename = "\(stem)-\(identifier.prefix(8)).\(filenameExtension)"
@@ -167,7 +168,10 @@ final class LocalProfileStore: ObservableObject {
       resourceName: resourceName,
       createParentDirectory: true
     )
-    try fileManager.copyItem(at: sourceURL, to: destinationURL)
+    // The UUID-derived destination is unique; Foundation's atomic writer uses
+    // a sibling temporary file followed by rename. (`withoutOverwriting`
+    // cannot be combined with `.atomic` on Darwin.)
+    try snapshotData.write(to: destinationURL, options: .atomic)
 
     let reference = DisplayAssetReference(
       identifier: identifier,

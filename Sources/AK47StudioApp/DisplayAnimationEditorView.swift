@@ -9,12 +9,92 @@ struct DisplayAnimationEditorInput: Identifiable {
   let sourceURL: URL
   let displayName: String
   let fallbackDelayMilliseconds: Int
+  let preparedDecodedSource: AK47LCDDecodedGIF?
+  let preparedSourceRequiresExport: Bool
+
+  init(
+    sourceURL: URL,
+    displayName: String,
+    fallbackDelayMilliseconds: Int,
+    preparedDecodedSource: AK47LCDDecodedGIF? = nil,
+    preparedSourceRequiresExport: Bool = false
+  ) {
+    self.sourceURL = sourceURL
+    self.displayName = displayName
+    self.fallbackDelayMilliseconds = fallbackDelayMilliseconds
+    self.preparedDecodedSource = preparedDecodedSource
+    self.preparedSourceRequiresExport = preparedSourceRequiresExport
+  }
+}
+
+typealias DisplaySourceTransformRenderer =
+  @Sendable (
+    _ source: AK47LCDDecodedGIF,
+    _ mode: AK47LCDResizeMode,
+    _ aspectFill: AK47LCDAspectFillTransform?
+  ) throws -> AK47LCDAnimationProject
+
+private let defaultDisplaySourceTransformRenderer: DisplaySourceTransformRenderer = {
+  source,
+  mode,
+  aspectFill in
+  if mode == .aspectFill {
+    return try source.makeProject(aspectFill: aspectFill ?? .centered)
+  }
+  return try source.makeProject(resizeMode: mode)
+}
+
+enum DisplayAnimationEditorPresentation: Equatable {
+  /// Legacy library flow presented in its own dismissible sheet.
+  case sheet
+  /// Primary Display-tab flow hosted directly inside the page.
+  case embedded
+}
+
+struct DisplayAnimationEditorDraftState: Equatable, Sendable {
+  let hasUnexportedChanges: Bool
+  let hasPendingSourceTransform: Bool
+  let isBusy: Bool
+  let requiresReplacementConfirmation: Bool
 }
 
 struct DisplayAnimationEditorView: View {
+  let input: DisplayAnimationEditorInput
+  @ObservedObject var studioModel: StudioModel
+  let presentation: DisplayAnimationEditorPresentation
+  let onDraftStateChange: ((DisplayAnimationEditorDraftState) -> Void)?
+
+  init(
+    input: DisplayAnimationEditorInput,
+    studioModel: StudioModel,
+    presentation: DisplayAnimationEditorPresentation = .sheet,
+    onDraftStateChange: ((DisplayAnimationEditorDraftState) -> Void)? = nil
+  ) {
+    self.input = input
+    self.studioModel = studioModel
+    self.presentation = presentation
+    self.onDraftStateChange = onDraftStateChange
+  }
+
+  var body: some View {
+    DisplayAnimationEditorSession(
+      input: input,
+      studioModel: studioModel,
+      presentation: presentation,
+      onDraftStateChange: onDraftStateChange
+    )
+    // Replacing an inline import must create a fresh StateObject-backed editing
+    // session instead of retaining the prior asset's decoded source and draft.
+    .id(input.id)
+  }
+}
+
+private struct DisplayAnimationEditorSession: View {
   @Environment(\.dismiss) private var dismiss
   @Environment(\.studioLanguage) private var language
   @ObservedObject private var studioModel: StudioModel
+  private let presentation: DisplayAnimationEditorPresentation
+  private let onDraftStateChange: ((DisplayAnimationEditorDraftState) -> Void)?
   @StateObject private var model: DisplayAnimationEditorModel
   @State private var drawingPoints: [AK47LCDPixelPoint] = []
   @State private var showsCloseDiscardConfirmation = false
@@ -24,8 +104,15 @@ struct DisplayAnimationEditorView: View {
   @State private var isPreparingQualifiedUpload = false
   @State private var qualifiedUploadPreparationError: String?
 
-  init(input: DisplayAnimationEditorInput, studioModel: StudioModel) {
+  init(
+    input: DisplayAnimationEditorInput,
+    studioModel: StudioModel,
+    presentation: DisplayAnimationEditorPresentation,
+    onDraftStateChange: ((DisplayAnimationEditorDraftState) -> Void)?
+  ) {
     self.studioModel = studioModel
+    self.presentation = presentation
+    self.onDraftStateChange = onDraftStateChange
     _model = StateObject(wrappedValue: DisplayAnimationEditorModel(input: input))
   }
 
@@ -35,7 +122,11 @@ struct DisplayAnimationEditorView: View {
       Divider()
       if model.isLoading, model.project == nil {
         ProgressView(
-          studioText("GIF 프레임을 안전하게 해제하는 중…", "Safely decoding GIF frames…", language: language)
+          studioText(
+            "미디어 프레임을 안전하게 준비하는 중…",
+            "Safely preparing media frames…",
+            language: language
+          )
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
       } else if let project = model.project {
@@ -51,8 +142,14 @@ struct DisplayAnimationEditorView: View {
           Image(systemName: "exclamationmark.triangle")
             .font(.largeTitle)
             .foregroundStyle(StudioPalette.coral)
-          Text(studioText("GIF를 열 수 없습니다", "Could not open GIF", language: language))
-            .font(.headline)
+          Text(
+            studioText(
+              "이미지·애니메이션을 열 수 없습니다",
+              "Could not open the image or animation",
+              language: language
+            )
+          )
+          .font(.headline)
           Text(model.message ?? "")
             .font(.callout)
             .foregroundStyle(.secondary)
@@ -64,13 +161,27 @@ struct DisplayAnimationEditorView: View {
       Divider()
       footer
     }
-    .frame(minWidth: 1_050, idealWidth: 1_130, minHeight: 690, idealHeight: 760)
+    .frame(
+      minWidth: presentation == .sheet ? 1_050 : nil,
+      idealWidth: presentation == .sheet ? 1_130 : nil,
+      minHeight: 690,
+      idealHeight: 760
+    )
     .task {
       await model.loadIfNeeded()
     }
-    .interactiveDismissDisabled(model.hasUnexportedChanges || isQualifiedUploadActive)
+    .onAppear {
+      onDraftStateChange?(draftState)
+    }
+    .onChange(of: draftState) { state in
+      onDraftStateChange?(state)
+    }
+    .interactiveDismissDisabled(
+      presentation == .sheet
+        && (model.requiresReplacementConfirmation || model.isLoading || isQualifiedUploadActive)
+    )
     .alert(
-      studioText("내보내지 않은 편집을 버릴까요?", "Discard unexported edits?", language: language),
+      studioText("현재 편집을 버릴까요?", "Discard the current edit?", language: language),
       isPresented: $showsCloseDiscardConfirmation
     ) {
       Button(studioText("계속 편집", "Keep editing", language: language), role: .cancel) {}
@@ -80,8 +191,8 @@ struct DisplayAnimationEditorView: View {
     } message: {
       Text(
         studioText(
-          "마지막 편집 GIF 내보내기 이후의 변경사항이 사라집니다. LCD 컨테이너는 다시 편집할 수 있는 프로젝트 파일이 아닙니다.",
-          "Changes made after the last edited-GIF export will be lost. An LCD container is not a reopenable project file.",
+          "편집 GIF로 내보내지 않은 불러온 영상 프레임, 변경 내용, 미적용 크롭 설정이 사라집니다. LCD 컨테이너는 다시 편집할 수 있는 프로젝트 파일이 아닙니다.",
+          "Imported video frames not exported as an edited GIF, later changes, and unapplied crop settings will be lost. An LCD container is not a reopenable project file.",
           language: language
         )
       )
@@ -96,17 +207,17 @@ struct DisplayAnimationEditorView: View {
       titleVisibility: .visible
     ) {
       Button(
-        studioText("편집을 버리고 다시 렌더링", "Discard edits and render again", language: language),
+        studioText("편집을 버리고 이 화면으로 적용", "Discard edits and apply this view", language: language),
         role: .destructive
       ) {
-        model.rerenderOriginalFrames()
+        Task { await model.applyPendingSourceTransform() }
       }
       Button(studioText("취소", "Cancel", language: language), role: .cancel) {}
     } message: {
       Text(
         studioText(
-          "추가한 프레임과 모든 픽셀 편집이 사라지고 처음 가져온 GIF만 다시 사용됩니다.",
-          "Added frames and all pixel edits will be removed; only the initially imported GIF is rendered again.",
+          "불러온 원본을 기준으로 전체 프레임을 다시 만듭니다. 추가한 프레임과 픽셀 편집은 사라지지만, 프레임 수가 같으면 조정한 지연 값은 유지합니다.",
+          "All frames are rebuilt from the imported source. Added frames and pixel edits are removed; adjusted delays are preserved when the frame count still matches.",
           language: language
         )
       )
@@ -145,11 +256,27 @@ struct DisplayAnimationEditorView: View {
     }
   }
 
+  private var draftState: DisplayAnimationEditorDraftState {
+    DisplayAnimationEditorDraftState(
+      hasUnexportedChanges: model.hasUnexportedChanges,
+      hasPendingSourceTransform: model.hasPendingSourceTransform,
+      isBusy: model.isLoading || isPreparingQualifiedUpload || isQualifiedUploadActive
+        || pendingQualifiedUpload != nil || qualifiedVisualReviewSnapshot != nil,
+      requiresReplacementConfirmation: model.requiresReplacementConfirmation
+    )
+  }
+
   private var header: some View {
     HStack(spacing: 14) {
       VStack(alignment: .leading, spacing: 3) {
-        Text(studioText("오프라인 GIF 편집기", "Offline GIF editor", language: language))
-          .font(.title3.bold())
+        Text(
+          studioText(
+            "이미지·애니메이션 편집기",
+            "Image & animation editor",
+            language: language
+          )
+        )
+        .font(.title3.bold())
         Text(model.input.displayName)
           .font(.caption.monospaced())
           .foregroundStyle(.secondary)
@@ -169,25 +296,27 @@ struct DisplayAnimationEditorView: View {
         studioModel.lcdExtendedQualificationViewState.permitsExtendedUpload
           ? StudioPalette.mint : .secondary
       )
-      Button(studioText("닫기", "Close", language: language)) {
-        guard !isQualifiedUploadActive else { return }
-        if model.hasUnexportedChanges {
-          showsCloseDiscardConfirmation = true
-        } else {
-          dismiss()
+      if presentation == .sheet {
+        Button(studioText("닫기", "Close", language: language)) {
+          guard !isQualifiedUploadActive, !model.isLoading else { return }
+          if model.requiresReplacementConfirmation {
+            showsCloseDiscardConfirmation = true
+          } else {
+            dismiss()
+          }
         }
+        .keyboardShortcut(.cancelAction)
+        .disabled(isQualifiedUploadActive || model.isLoading)
+        .help(
+          isQualifiedUploadActive || model.isLoading
+            ? studioText(
+              "현재 작업이 끝날 때까지 편집기를 닫을 수 없습니다.",
+              "The editor cannot close until the current operation finishes.",
+              language: language
+            )
+            : ""
+        )
       }
-      .keyboardShortcut(.cancelAction)
-      .disabled(isQualifiedUploadActive)
-      .help(
-        isQualifiedUploadActive
-          ? studioText(
-            "장치 전송이 끝날 때까지 편집기를 닫을 수 없습니다.",
-            "The editor cannot close until the device transfer finishes.",
-            language: language
-          )
-          : ""
-      )
     }
     .padding(.horizontal, 20)
     .padding(.vertical, 14)
@@ -249,6 +378,7 @@ struct DisplayAnimationEditorView: View {
         } label: {
           Image(systemName: "plus")
         }
+        .disabled(model.hasPendingSourceTransform || model.isLoading)
         .help(studioText("다른 GIF의 프레임 추가", "Add frames from another GIF", language: language))
 
         Button {
@@ -256,6 +386,7 @@ struct DisplayAnimationEditorView: View {
         } label: {
           Image(systemName: "plus.square.on.square")
         }
+        .disabled(model.hasPendingSourceTransform || model.isLoading)
         .help(studioText("프레임 복제", "Duplicate frame", language: language))
 
         Button(role: .destructive) {
@@ -263,7 +394,9 @@ struct DisplayAnimationEditorView: View {
         } label: {
           Image(systemName: "trash")
         }
-        .disabled(project.frames.count <= 1)
+        .disabled(
+          project.frames.count <= 1 || model.hasPendingSourceTransform || model.isLoading
+        )
         .help(studioText("프레임 삭제", "Delete frame", language: language))
 
         Spacer()
@@ -272,14 +405,19 @@ struct DisplayAnimationEditorView: View {
         } label: {
           Image(systemName: "chevron.up")
         }
-        .disabled(model.selectedFrameIndex == 0)
+        .disabled(
+          model.selectedFrameIndex == 0 || model.hasPendingSourceTransform || model.isLoading
+        )
 
         Button {
           model.moveSelectedFrame(by: 1)
         } label: {
           Image(systemName: "chevron.down")
         }
-        .disabled(model.selectedFrameIndex >= project.frames.count - 1)
+        .disabled(
+          model.selectedFrameIndex >= project.frames.count - 1 || model.hasPendingSourceTransform
+            || model.isLoading
+        )
       }
       .buttonStyle(.bordered)
       .controlSize(.small)
@@ -291,8 +429,19 @@ struct DisplayAnimationEditorView: View {
   private func previewPane(project: AK47LCDAnimationProject) -> some View {
     VStack(alignment: .leading, spacing: 14) {
       HStack {
-        Text(studioText("240×135 결과", "240×135 result", language: language))
+        Text(studioText("실제 LCD 출력", "Actual LCD output", language: language))
           .font(.headline)
+        Text("240×135 · 16:9")
+          .font(.caption2.monospacedDigit().weight(.semibold))
+          .foregroundStyle(.secondary)
+        if model.hasPendingSourceTransform {
+          Label(
+            studioText("미적용 미리보기", "Unapplied preview", language: language),
+            systemImage: "eye"
+          )
+          .font(.caption2.weight(.semibold))
+          .foregroundStyle(StudioPalette.violet)
+        }
         Spacer()
         Text("\(model.selectedFrameIndex + 1) / \(project.frames.count)")
           .font(.caption.monospacedDigit())
@@ -317,13 +466,15 @@ struct DisplayAnimationEditorView: View {
         .gesture(
           DragGesture(minimumDistance: 0)
             .onChanged { value in
-              guard model.drawingEnabled else { return }
+              guard model.drawingEnabled, !model.hasPendingSourceTransform, !model.isLoading else {
+                return
+              }
               let point = devicePoint(from: value.location, canvasSize: geometry.size)
               guard drawingPoints.last != point, drawingPoints.count < 4_096 else { return }
               drawingPoints.append(point)
             }
             .onEnded { _ in
-              guard model.drawingEnabled else {
+              guard model.drawingEnabled, !model.hasPendingSourceTransform, !model.isLoading else {
                 drawingPoints.removeAll(keepingCapacity: true)
                 return
               }
@@ -333,13 +484,37 @@ struct DisplayAnimationEditorView: View {
         )
       }
       .aspectRatio(240.0 / 135.0, contentMode: .fit)
-      .frame(maxWidth: .infinity, maxHeight: 440)
       .background(Color.black)
       .clipShape(RoundedRectangle(cornerRadius: 8))
       .overlay {
         RoundedRectangle(cornerRadius: 8)
           .strokeBorder(Color.white.opacity(0.12))
       }
+      .frame(maxWidth: .infinity, maxHeight: 440)
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel(
+        studioText(
+          "실제 LCD와 같은 240 곱하기 135, 16대 9 출력 미리보기",
+          "Output preview at the LCD's exact 240 by 135, 16 by 9 aspect ratio",
+          language: language
+        )
+      )
+
+      Text(
+        model.hasPendingSourceTransform
+          ? studioText(
+            "현재 화면은 원본에 크롭·맞춤을 적용한 실제 출력 미리보기입니다. 내보내기나 장치 적용 전에 아래 ‘이 화면 적용’을 눌러주세요.",
+            "This is the actual output preview with crop and resize applied to the source. Choose Apply this view before exporting or sending it to the device.",
+            language: language
+          )
+          : studioText(
+            "검은 여백과 잘림까지 장치에 저장될 240×135 픽셀을 그대로 표시합니다.",
+            "Shows the exact 240×135 pixels stored on the device, including black bars and clipping.",
+            language: language
+          )
+      )
+      .font(.caption2)
+      .foregroundStyle(model.hasPendingSourceTransform ? StudioPalette.violet : .secondary)
 
       HStack(spacing: 10) {
         Button {
@@ -427,53 +602,11 @@ struct DisplayAnimationEditorView: View {
           .frame(maxWidth: .infinity, alignment: .leading)
           .padding(.top, 5)
         }
+        .disabled(model.hasPendingSourceTransform || model.isLoading)
 
         GroupBox(studioText("크롭 및 맞춤", "Crop and resize", language: language)) {
-          VStack(alignment: .leading, spacing: 9) {
-            Picker("", selection: $model.resizeMode) {
-              Text(studioText("맞춤", "Fit", language: language)).tag(AK47LCDResizeMode.aspectFit)
-              Text(studioText("채움/크롭", "Fill/crop", language: language)).tag(
-                AK47LCDResizeMode.aspectFill)
-              Text(studioText("늘이기", "Stretch", language: language)).tag(AK47LCDResizeMode.stretch)
-            }
-            .pickerStyle(.segmented)
-
-            Toggle(
-              studioText("사용자 크롭", "Custom crop", language: language),
-              isOn: $model.customCropEnabled)
-            if model.customCropEnabled {
-              Grid(horizontalSpacing: 7, verticalSpacing: 7) {
-                GridRow {
-                  cropField("X", value: $model.cropX)
-                  cropField("Y", value: $model.cropY)
-                }
-                GridRow {
-                  cropField("W", value: $model.cropWidth)
-                  cropField("H", value: $model.cropHeight)
-                }
-              }
-            }
-            Button {
-              if model.hasUnexportedChanges {
-                showsRerenderDiscardConfirmation = true
-              } else {
-                model.rerenderOriginalFrames()
-              }
-            } label: {
-              Label(
-                studioText("원본에서 다시 렌더링", "Render again from source", language: language),
-                systemImage: "rectangle.arrowtriangle.2.outward"
-              )
-            }
-            .help(
-              studioText(
-                "현재 프레임 편집은 버리고 가져온 원본에 크롭/맞춤을 적용합니다.",
-                "Discards current frame edits and reapplies crop/resize to the imported source.",
-                language: language
-              )
-            )
-          }
-          .padding(.top, 5)
+          sourceTransformControls
+            .padding(.top, 5)
         }
 
         GroupBox(studioText("텍스트", "Text", language: language)) {
@@ -497,6 +630,7 @@ struct DisplayAnimationEditorView: View {
           }
           .padding(.top, 5)
         }
+        .disabled(model.hasPendingSourceTransform || model.isLoading)
 
         GroupBox(studioText("펜", "Pen", language: language)) {
           VStack(alignment: .leading, spacing: 8) {
@@ -522,10 +656,307 @@ struct DisplayAnimationEditorView: View {
           }
           .padding(.top, 5)
         }
+        .disabled(model.hasPendingSourceTransform || model.isLoading)
       }
       .padding(16)
     }
     .frame(width: 310)
+  }
+
+  @ViewBuilder
+  private var sourceTransformControls: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Picker(
+        studioText("화면 맞춤 방식", "Screen sizing mode", language: language),
+        selection: Binding(
+          get: { model.resizeMode },
+          set: { model.setResizeMode($0) }
+        )
+      ) {
+        Text(studioText("전체 맞춤", "Fit all", language: language)).tag(
+          AK47LCDResizeMode.aspectFit)
+        Text(studioText("채움/크롭", "Fill/crop", language: language)).tag(
+          AK47LCDResizeMode.aspectFill)
+        Text(studioText("늘이기", "Stretch", language: language)).tag(AK47LCDResizeMode.stretch)
+      }
+      .labelsHidden()
+      .pickerStyle(.segmented)
+      .disabled(model.isLoading)
+
+      Label(sourceTransformModeDescription, systemImage: sourceTransformModeSymbol)
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+
+      if model.resizeMode == .aspectFill,
+        let sourceImage = model.sourceOverviewImage,
+        let layout = model.aspectFillLayout
+      {
+        LCDSourceCropMap(
+          image: sourceImage,
+          sourceWidth: model.sourceWidth,
+          sourceHeight: model.sourceHeight,
+          viewport: layout.viewport
+        )
+        .frame(height: 112)
+
+        if model.sourcePreviewUsesImportedFrameReference {
+          Label(
+            studioText(
+              "현재 프로젝트가 편집되어 불러온 원본의 \(model.sourcePreviewFrameNumber)번 프레임을 미리보기 기준으로 사용합니다.",
+              "The current project has edits, so imported-source frame \(model.sourcePreviewFrameNumber) is used as the source-preview reference.",
+              language: language
+            ),
+            systemImage: "info.circle"
+          )
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+        }
+
+        HStack {
+          Text(
+            studioText(
+              "원본 \(model.sourceWidth)×\(model.sourceHeight)",
+              "Source \(model.sourceWidth)×\(model.sourceHeight)",
+              language: language
+            )
+          )
+          Spacer()
+          Text(
+            studioText(
+              "보이는 영역 \(formattedViewport(layout.viewport))",
+              "Visible \(formattedViewport(layout.viewport))",
+              language: language
+            )
+          )
+        }
+        .font(.caption2.monospacedDigit())
+        .foregroundStyle(.secondary)
+
+        cropXAxisControl(layout: layout)
+        cropYAxisControl(layout: layout)
+
+        HStack {
+          Button {
+            model.centerAspectFillCrop()
+          } label: {
+            Label(studioText("가운데", "Center", language: language), systemImage: "scope")
+          }
+          .disabled(
+            (model.fillOffsetX == 0 && model.fillOffsetY == 0) || model.isLoading
+          )
+          .help(
+            studioText(
+              "원본의 가운데를 LCD 가운데에 맞춥니다.",
+              "Centers the source inside the LCD crop window.",
+              language: language
+            )
+          )
+          Spacer()
+          Text(
+            studioText(
+              "안쪽 화살표 1 px · 바깥 화살표 10 px",
+              "Inner arrows 1 px · outer arrows 10 px",
+              language: language
+            )
+          )
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+        }
+        .controlSize(.small)
+      }
+
+      if model.hasPendingSourceTransform {
+        Divider()
+        Label(
+          studioText(
+            "위 설정은 실제 LCD 출력으로 미리보기 중이며 아직 프로젝트에는 적용되지 않았습니다.",
+            "These settings are shown as the actual LCD output, but are not applied to the project yet.",
+            language: language
+          ),
+          systemImage: "eye"
+        )
+        .font(.caption2)
+        .foregroundStyle(StudioPalette.violet)
+
+        HStack {
+          Button(studioText("되돌리기", "Reset", language: language)) {
+            model.resetPendingSourceTransform()
+          }
+          Button {
+            applySourceTransform()
+          } label: {
+            Label(
+              studioText("이 화면 적용", "Apply this view", language: language),
+              systemImage: "checkmark.rectangle.stack"
+            )
+          }
+          .buttonStyle(.borderedProminent)
+          .tint(StudioPalette.blue)
+          .disabled(model.isLoading)
+        }
+        .controlSize(.small)
+      }
+    }
+  }
+
+  private var sourceTransformModeDescription: String {
+    switch model.resizeMode {
+    case .aspectFit:
+      return studioText(
+        "잘림 없이 원본 전체를 240×135 안으로 축소·확대하며 비율을 유지합니다. 비율이 다르면 검은 여백이 생깁니다.",
+        "Fits the entire source inside 240×135 with no cropping and preserves its proportions. Different aspect ratios produce black bars.",
+        language: language
+      )
+    case .aspectFill:
+      return studioText(
+        "비율을 유지한 채 16:9 LCD를 빈틈없이 채웁니다. 화살표로 잘릴 부분을 고릅니다.",
+        "Fills the 16:9 LCD without gaps while preserving aspect ratio. Use the arrows to choose what gets clipped.",
+        language: language
+      )
+    case .stretch:
+      return studioText(
+        "잘림과 여백 없이 원본 전체를 240×135로 늘리므로 원본 비율이 변형됩니다.",
+        "Stretches the whole source to 240×135 with no clipping or bars, which changes its proportions.",
+        language: language
+      )
+    }
+  }
+
+  private var sourceTransformModeSymbol: String {
+    switch model.resizeMode {
+    case .aspectFit: "rectangle.inset.filled"
+    case .aspectFill: "rectangle.fill.on.rectangle.fill"
+    case .stretch: "arrow.up.left.and.arrow.down.right"
+    }
+  }
+
+  private func cropXAxisControl(layout: AK47LCDAspectFillLayout) -> some View {
+    HStack(spacing: 6) {
+      Text("X")
+        .font(.caption.monospaced().weight(.semibold))
+        .frame(width: 16)
+      cropNudgeButton(
+        symbol: "chevron.left.2",
+        accessibilityLabel: studioText("X 10픽셀 왼쪽", "Move X 10 pixels left", language: language),
+        disabled: !model.canNudgeAspectFill(x: -10, y: 0)
+      ) {
+        model.nudgeAspectFill(x: -10, y: 0)
+      }
+      cropNudgeButton(
+        symbol: "chevron.left",
+        accessibilityLabel: studioText("X 1픽셀 왼쪽", "Move X 1 pixel left", language: language),
+        disabled: !model.canNudgeAspectFill(x: -1, y: 0)
+      ) {
+        model.nudgeAspectFill(x: -1, y: 0)
+      }
+      Text(formattedSourceOffset(layout.appliedSourceOffsetX))
+        .font(.caption.monospacedDigit())
+        .frame(minWidth: 55)
+        .accessibilityLabel(
+          studioText(
+            "실제 X 이동 \(formattedSourceOffset(layout.appliedSourceOffsetX)), 조작 범위 \(layout.sourcePixelOffsetXRange.lowerBound)에서 \(layout.sourcePixelOffsetXRange.upperBound)",
+            "Applied X offset \(formattedSourceOffset(layout.appliedSourceOffsetX)), control range \(layout.sourcePixelOffsetXRange.lowerBound) through \(layout.sourcePixelOffsetXRange.upperBound)",
+            language: language
+          )
+        )
+      cropNudgeButton(
+        symbol: "chevron.right",
+        accessibilityLabel: studioText("X 1픽셀 오른쪽", "Move X 1 pixel right", language: language),
+        disabled: !model.canNudgeAspectFill(x: 1, y: 0)
+      ) {
+        model.nudgeAspectFill(x: 1, y: 0)
+      }
+      cropNudgeButton(
+        symbol: "chevron.right.2",
+        accessibilityLabel: studioText("X 10픽셀 오른쪽", "Move X 10 pixels right", language: language),
+        disabled: !model.canNudgeAspectFill(x: 10, y: 0)
+      ) {
+        model.nudgeAspectFill(x: 10, y: 0)
+      }
+    }
+    .buttonStyle(.bordered)
+    .controlSize(.small)
+  }
+
+  private func cropYAxisControl(layout: AK47LCDAspectFillLayout) -> some View {
+    HStack(spacing: 6) {
+      Text("Y")
+        .font(.caption.monospaced().weight(.semibold))
+        .frame(width: 16)
+      cropNudgeButton(
+        symbol: "chevron.up.2",
+        accessibilityLabel: studioText("Y 10픽셀 위쪽", "Move Y 10 pixels up", language: language),
+        disabled: !model.canNudgeAspectFill(x: 0, y: -10)
+      ) {
+        model.nudgeAspectFill(x: 0, y: -10)
+      }
+      cropNudgeButton(
+        symbol: "chevron.up",
+        accessibilityLabel: studioText("Y 1픽셀 위쪽", "Move Y 1 pixel up", language: language),
+        disabled: !model.canNudgeAspectFill(x: 0, y: -1)
+      ) {
+        model.nudgeAspectFill(x: 0, y: -1)
+      }
+      Text(formattedSourceOffset(layout.appliedSourceOffsetY))
+        .font(.caption.monospacedDigit())
+        .frame(minWidth: 55)
+        .accessibilityLabel(
+          studioText(
+            "실제 Y 이동 \(formattedSourceOffset(layout.appliedSourceOffsetY)), 조작 범위 \(layout.sourcePixelOffsetYRange.lowerBound)에서 \(layout.sourcePixelOffsetYRange.upperBound)",
+            "Applied Y offset \(formattedSourceOffset(layout.appliedSourceOffsetY)), control range \(layout.sourcePixelOffsetYRange.lowerBound) through \(layout.sourcePixelOffsetYRange.upperBound)",
+            language: language
+          )
+        )
+      cropNudgeButton(
+        symbol: "chevron.down",
+        accessibilityLabel: studioText("Y 1픽셀 아래쪽", "Move Y 1 pixel down", language: language),
+        disabled: !model.canNudgeAspectFill(x: 0, y: 1)
+      ) {
+        model.nudgeAspectFill(x: 0, y: 1)
+      }
+      cropNudgeButton(
+        symbol: "chevron.down.2",
+        accessibilityLabel: studioText("Y 10픽셀 아래쪽", "Move Y 10 pixels down", language: language),
+        disabled: !model.canNudgeAspectFill(x: 0, y: 10)
+      ) {
+        model.nudgeAspectFill(x: 0, y: 10)
+      }
+    }
+    .buttonStyle(.bordered)
+    .controlSize(.small)
+  }
+
+  private func cropNudgeButton(
+    symbol: String,
+    accessibilityLabel: String,
+    disabled: Bool,
+    action: @escaping () -> Void
+  ) -> some View {
+    Button(action: action) {
+      Image(systemName: symbol)
+        .frame(width: 13)
+    }
+    .disabled(disabled || model.isLoading)
+    .accessibilityLabel(accessibilityLabel)
+    .help(accessibilityLabel)
+  }
+
+  private func applySourceTransform() {
+    if model.wouldDiscardEditsWhenApplyingSourceTransform {
+      showsRerenderDiscardConfirmation = true
+    } else {
+      Task { await model.applyPendingSourceTransform() }
+    }
+  }
+
+  private func formattedViewport(_ viewport: AK47LCDSourceViewport) -> String {
+    "\(Int(viewport.width.rounded()))×\(Int(viewport.height.rounded()))"
+  }
+
+  private func formattedSourceOffset(_ offset: Double) -> String {
+    if offset.rounded() == offset { return "\(Int(offset)) px" }
+    return String(format: "%+.2f px", offset)
   }
 
   private var footer: some View {
@@ -559,7 +990,18 @@ struct DisplayAnimationEditorView: View {
             studioText("편집 GIF 내보내기…", "Export edited GIF…", language: language),
             systemImage: "photo.stack")
         }
-        .disabled(model.project == nil || model.isLoading || isQualifiedUploadActive)
+        .disabled(
+          model.project == nil || model.hasPendingSourceTransform || model.isLoading
+            || isQualifiedUploadActive
+        )
+        .help(
+          model.hasPendingSourceTransform
+            ? studioText(
+              "먼저 크롭 미리보기의 ‘이 화면 적용’을 눌러주세요.",
+              "Apply the crop preview to the project first.",
+              language: language
+            ) : ""
+        )
         Button {
           Task { await model.exportLCDContainer() }
         } label: {
@@ -568,7 +1010,8 @@ struct DisplayAnimationEditorView: View {
             systemImage: "shippingbox")
         }
         .disabled(
-          !model.canEncodeDeviceContainer || model.isLoading || isQualifiedUploadActive
+          !model.canEncodeDeviceContainer || model.hasPendingSourceTransform || model.isLoading
+            || isQualifiedUploadActive
         )
         .help(model.containerExportHelp(language: language))
         Button(role: .destructive) {
@@ -661,6 +1104,7 @@ struct DisplayAnimationEditorView: View {
     return studioModel.canPrepareQualifiedLCDAnimation
       && (1...AK47LCDUploadAdapter.qualifiedMaximumFrameCount).contains(project.frames.count)
       && model.canEncodeDeviceContainer
+      && !model.hasPendingSourceTransform
       && !model.isLoading
       && !isPreparingQualifiedUpload
       && !isQualifiedUploadActive
@@ -672,6 +1116,13 @@ struct DisplayAnimationEditorView: View {
   }
 
   private var qualifiedUploadBoundaryText: String {
+    if model.hasPendingSourceTransform {
+      return studioText(
+        "크롭 미리보기를 프로젝트에 적용한 뒤 내보내기·장치 적용 가능",
+        "Apply the crop preview to the project before export or device upload",
+        language: language
+      )
+    }
     guard studioModel.canPrepareQualifiedLCDAnimation else {
       return studioText(
         "Core의 전체 영속 qualification receipt가 검증되기 전까지 Apply 잠김",
@@ -688,7 +1139,18 @@ struct DisplayAnimationEditorView: View {
 
   private var qualifiedUploadHelp: String {
     guard let project = model.project else {
-      return studioText("먼저 GIF를 불러오세요.", "Load a GIF first.", language: language)
+      return studioText(
+        "먼저 이미지나 애니메이션을 불러오세요.",
+        "Load an image or animation first.",
+        language: language
+      )
+    }
+    if model.hasPendingSourceTransform {
+      return studioText(
+        "지금 보이는 크롭은 미리보기입니다. ‘이 화면 적용’을 먼저 눌러주세요.",
+        "The visible crop is still a preview. Choose Apply this view first.",
+        language: language
+      )
     }
     if project.frames.count > AK47LCDUploadAdapter.qualifiedMaximumFrameCount {
       return studioText(
@@ -708,7 +1170,7 @@ struct DisplayAnimationEditorView: View {
   }
 
   private func prepareQualifiedUploadConfirmation() async {
-    guard let project = model.project else { return }
+    guard let project = model.project, !model.hasPendingSourceTransform else { return }
     isPreparingQualifiedUpload = true
     qualifiedUploadPreparationError = nil
     defer { isPreparingQualifiedUpload = false }
@@ -749,6 +1211,89 @@ struct DisplayAnimationEditorView: View {
   private func formattedDuration(_ milliseconds: Int) -> String {
     if milliseconds < 1_000 { return "\(milliseconds) ms" }
     return String(format: "%.2f s", Double(milliseconds) / 1_000)
+  }
+}
+
+private struct LCDSourceCropMap: View {
+  @Environment(\.studioLanguage) private var language
+  let image: NSImage
+  let sourceWidth: Int
+  let sourceHeight: Int
+  let viewport: AK47LCDSourceViewport
+
+  var body: some View {
+    GeometryReader { geometry in
+      let imageRectangle = aspectFitRectangle(in: geometry.size)
+      let cropRectangle = scaledViewport(in: imageRectangle)
+
+      ZStack(alignment: .topLeading) {
+        Color.black.opacity(0.85)
+        Image(nsImage: image)
+          .resizable()
+          .interpolation(.high)
+          .frame(width: imageRectangle.width, height: imageRectangle.height)
+          .position(x: imageRectangle.midX, y: imageRectangle.midY)
+
+        Path { path in
+          path.addRect(imageRectangle)
+          path.addRect(cropRectangle)
+        }
+        .fill(Color.black.opacity(0.62), style: FillStyle(eoFill: true))
+
+        Rectangle()
+          .strokeBorder(StudioPalette.mint, lineWidth: 2)
+          .background(StudioPalette.mint.opacity(0.05))
+          .frame(width: cropRectangle.width, height: cropRectangle.height)
+          .position(x: cropRectangle.midX, y: cropRectangle.midY)
+
+        Text(studioText("원본 크롭 지도", "Source crop map", language: language))
+          .font(.caption2.weight(.semibold))
+          .padding(.horizontal, 6)
+          .padding(.vertical, 3)
+          .background(.black.opacity(0.68), in: Capsule())
+          .padding(6)
+      }
+      .clipShape(RoundedRectangle(cornerRadius: 7))
+      .overlay {
+        RoundedRectangle(cornerRadius: 7)
+          .strokeBorder(Color.white.opacity(0.14))
+      }
+    }
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(
+      studioText(
+        "원본 이미지에서 LCD에 보이는 영역. 박스 밖의 어두운 부분은 잘립니다.",
+        "The part of the source visible on the LCD. Dimmed areas outside the box are clipped.",
+        language: language
+      )
+    )
+  }
+
+  private func aspectFitRectangle(in availableSize: CGSize) -> CGRect {
+    guard sourceWidth > 0, sourceHeight > 0 else { return .zero }
+    let scale = min(
+      availableSize.width / CGFloat(sourceWidth),
+      availableSize.height / CGFloat(sourceHeight)
+    )
+    let size = CGSize(width: CGFloat(sourceWidth) * scale, height: CGFloat(sourceHeight) * scale)
+    return CGRect(
+      x: (availableSize.width - size.width) / 2,
+      y: (availableSize.height - size.height) / 2,
+      width: size.width,
+      height: size.height
+    )
+  }
+
+  private func scaledViewport(in imageRectangle: CGRect) -> CGRect {
+    guard sourceWidth > 0, sourceHeight > 0 else { return .zero }
+    let scaleX = imageRectangle.width / CGFloat(sourceWidth)
+    let scaleY = imageRectangle.height / CGFloat(sourceHeight)
+    return CGRect(
+      x: imageRectangle.minX + CGFloat(viewport.x) * scaleX,
+      y: imageRectangle.minY + CGFloat(viewport.y) * scaleY,
+      width: CGFloat(viewport.width) * scaleX,
+      height: CGFloat(viewport.height) * scaleY
+    )
   }
 }
 
@@ -1261,18 +1806,17 @@ final class DisplayAnimationEditorModel: ObservableObject {
 
   @Published private(set) var project: AK47LCDAnimationProject?
   @Published private(set) var previewImage: NSImage?
+  @Published private(set) var previewFrameImage: AK47LCDRGBAImage?
+  @Published private(set) var sourceOverviewImage: NSImage?
   @Published private(set) var selectedFrameIndex = 0
   @Published private(set) var isLoading = false
   @Published private(set) var message: String?
   @Published private(set) var messageIsError = false
   @Published private(set) var isPlaying = false
   @Published private var playbackRevision = 0
-  @Published var resizeMode: AK47LCDResizeMode = .aspectFit
-  @Published var customCropEnabled = false
-  @Published var cropX = 0
-  @Published var cropY = 0
-  @Published var cropWidth = 240
-  @Published var cropHeight = 135
+  @Published private(set) var resizeMode: AK47LCDResizeMode = .aspectFit
+  @Published private(set) var fillOffsetX = 0
+  @Published private(set) var fillOffsetY = 0
   @Published var textOverlay = "KEYCANVAS"
   @Published var textX = 8
   @Published var textY = 8
@@ -1283,9 +1827,22 @@ final class DisplayAnimationEditorModel: ObservableObject {
 
   private var decodedSource: AK47LCDDecodedGIF?
   private var lastExportedProject: AK47LCDAnimationProject?
+  private var sourceRenderedProject: AK47LCDAnimationProject?
+  private var appliedResizeMode: AK47LCDResizeMode = .aspectFit
+  private var appliedFillOffsetX = 0
+  private var appliedFillOffsetY = 0
+  private var sourceTransformRevision = 0
+  private var sourceOverviewFrameIndex: Int?
+  private var hasExportedPreparedSource = false
+  private let sourceTransformRenderer: DisplaySourceTransformRenderer
 
-  init(input: DisplayAnimationEditorInput) {
+  init(
+    input: DisplayAnimationEditorInput,
+    sourceTransformRenderer: @escaping DisplaySourceTransformRenderer =
+      defaultDisplaySourceTransformRenderer
+  ) {
     self.input = input
+    self.sourceTransformRenderer = sourceTransformRenderer
   }
 
   var selectedSourceDelayMilliseconds: Int {
@@ -1318,7 +1875,52 @@ final class DisplayAnimationEditorModel: ObservableObject {
 
   var hasUnexportedChanges: Bool {
     guard let project else { return false }
-    return project != lastExportedProject
+    return project != lastExportedProject || hasPendingSourceTransform
+  }
+
+  var requiresReplacementConfirmation: Bool {
+    hasUnexportedChanges
+      || (input.preparedDecodedSource != nil
+        && input.preparedSourceRequiresExport
+        && !hasExportedPreparedSource)
+  }
+
+  var hasPendingSourceTransform: Bool {
+    guard decodedSource != nil else { return false }
+    if resizeMode != appliedResizeMode { return true }
+    guard resizeMode == .aspectFill else { return false }
+    return fillOffsetX != appliedFillOffsetX || fillOffsetY != appliedFillOffsetY
+  }
+
+  var wouldDiscardEditsWhenApplyingSourceTransform: Bool {
+    guard hasPendingSourceTransform, let project else { return false }
+    return project != sourceRenderedProject
+  }
+
+  var sourcePreviewUsesImportedFrameReference: Bool {
+    guard let project else { return false }
+    return project != sourceRenderedProject
+  }
+
+  var sourcePreviewFrameNumber: Int {
+    guard let decodedSource, !decodedSource.frames.isEmpty else { return 0 }
+    return min(selectedFrameIndex, decodedSource.frames.count - 1) + 1
+  }
+
+  var sourceWidth: Int {
+    decodedSource?.sourceWidth ?? 0
+  }
+
+  var sourceHeight: Int {
+    decodedSource?.sourceHeight ?? 0
+  }
+
+  var aspectFillLayout: AK47LCDAspectFillLayout? {
+    guard let decodedSource, let transform = currentAspectFillTransform else { return nil }
+    return try? transform.resolved(
+      sourceWidth: decodedSource.sourceWidth,
+      sourceHeight: decodedSource.sourceHeight
+    )
   }
 
   var playbackTaskID: String {
@@ -1330,19 +1932,26 @@ final class DisplayAnimationEditorModel: ObservableObject {
     isLoading = true
     defer { isLoading = false }
     do {
-      let sourceURL = input.sourceURL
-      let fallback = input.fallbackDelayMilliseconds
-      let decoded = try await Task.detached(priority: .userInitiated) {
-        try AK47LCDGIFDecoder.decode(
-          url: sourceURL,
-          fallbackDelayMilliseconds: fallback
-        )
-      }.value
+      let decoded: AK47LCDDecodedGIF
+      if let preparedDecodedSource = input.preparedDecodedSource {
+        decoded = preparedDecodedSource
+      } else {
+        let sourceURL = input.sourceURL
+        let fallback = input.fallbackDelayMilliseconds
+        decoded = try await Task.detached(priority: .userInitiated) {
+          try AK47LCDGIFDecoder.decode(
+            url: sourceURL,
+            fallbackDelayMilliseconds: fallback
+          )
+        }.value
+      }
       decodedSource = decoded
-      cropWidth = decoded.sourceWidth
-      cropHeight = decoded.sourceHeight
       project = try decoded.makeProject(resizeMode: resizeMode)
       lastExportedProject = project
+      sourceRenderedProject = project
+      appliedResizeMode = resizeMode
+      appliedFillOffsetX = fillOffsetX
+      appliedFillOffsetY = fillOffsetY
       selectedFrameIndex = 0
       refreshPreview()
       succeed("Loaded \(decoded.frames.count) fully composited local frame(s).")
@@ -1445,20 +2054,129 @@ final class DisplayAnimationEditorModel: ObservableObject {
     }
   }
 
-  func rerenderOriginalFrames() {
-    guard let decodedSource else { return }
+  func setResizeMode(_ mode: AK47LCDResizeMode) {
+    guard resizeMode != mode, !isLoading else { return }
+    resizeMode = mode
+    sourceTransformRevision += 1
+    clampAspectFillOffsetsIfNeeded()
+    isPlaying = false
+    playbackRevision += 1
+    refreshPreview()
+  }
+
+  func nudgeAspectFill(x deltaX: Int, y deltaY: Int) {
+    guard resizeMode == .aspectFill, !isLoading, let decodedSource else { return }
     do {
-      let crop =
-        customCropEnabled
-        ? AK47LCDPixelRect(x: cropX, y: cropY, width: cropWidth, height: cropHeight)
-        : nil
-      project = try decodedSource.makeProject(
-        resizeMode: resizeMode,
-        cropRectangle: crop
+      let currentLayout = try AK47LCDAspectFillTransform.centered.resolved(
+        sourceWidth: decodedSource.sourceWidth,
+        sourceHeight: decodedSource.sourceHeight
       )
-      selectedFrameIndex = min(selectedFrameIndex, (project?.frames.count ?? 1) - 1)
+      let requestedX = min(
+        currentLayout.sourcePixelOffsetXRange.upperBound,
+        max(currentLayout.sourcePixelOffsetXRange.lowerBound, fillOffsetX + deltaX)
+      )
+      let requestedY = min(
+        currentLayout.sourcePixelOffsetYRange.upperBound,
+        max(currentLayout.sourcePixelOffsetYRange.lowerBound, fillOffsetY + deltaY)
+      )
+      let transform = try AK47LCDAspectFillTransform.sourcePixels(
+        x: Double(requestedX),
+        y: Double(requestedY)
+      )
+      _ = try transform.resolved(
+        sourceWidth: decodedSource.sourceWidth,
+        sourceHeight: decodedSource.sourceHeight
+      )
+      // Preserve the clamped requested integer at fractional crop extremes.
+      // The resolved layout separately exposes the exact applied Double value.
+      fillOffsetX = requestedX
+      fillOffsetY = requestedY
+      sourceTransformRevision += 1
+      isPlaying = false
+      playbackRevision += 1
       refreshPreview()
-      succeed("Re-rendered the imported source; prior pixel edits were discarded.")
+    } catch {
+      fail(error)
+    }
+  }
+
+  func canNudgeAspectFill(x deltaX: Int, y deltaY: Int) -> Bool {
+    guard resizeMode == .aspectFill, let layout = aspectFillLayout else { return false }
+    if deltaX < 0, fillOffsetX > layout.sourcePixelOffsetXRange.lowerBound { return true }
+    if deltaX > 0, fillOffsetX < layout.sourcePixelOffsetXRange.upperBound { return true }
+    if deltaY < 0, fillOffsetY > layout.sourcePixelOffsetYRange.lowerBound { return true }
+    if deltaY > 0, fillOffsetY < layout.sourcePixelOffsetYRange.upperBound { return true }
+    return false
+  }
+
+  func centerAspectFillCrop() {
+    guard resizeMode == .aspectFill, fillOffsetX != 0 || fillOffsetY != 0, !isLoading else {
+      return
+    }
+    fillOffsetX = 0
+    fillOffsetY = 0
+    sourceTransformRevision += 1
+    isPlaying = false
+    playbackRevision += 1
+    refreshPreview()
+  }
+
+  func resetPendingSourceTransform() {
+    guard hasPendingSourceTransform, !isLoading else { return }
+    resizeMode = appliedResizeMode
+    fillOffsetX = appliedFillOffsetX
+    fillOffsetY = appliedFillOffsetY
+    sourceTransformRevision += 1
+    isPlaying = false
+    playbackRevision += 1
+    refreshPreview()
+    succeed("Reset the live crop preview to the applied project.")
+  }
+
+  func applyPendingSourceTransform() async {
+    guard hasPendingSourceTransform, !isLoading, let decodedSource, let currentProject = project
+    else { return }
+
+    let mode = resizeMode
+    let transform = currentAspectFillTransform
+    let revision = sourceTransformRevision
+    let renderer = sourceTransformRenderer
+    let preservedDelays =
+      currentProject.frames.count == decodedSource.frames.count
+      ? currentProject.frames.map(\.sourceDelay.milliseconds) : nil
+
+    isLoading = true
+    isPlaying = false
+    playbackRevision += 1
+    defer { isLoading = false }
+
+    do {
+      let rendered = try await Task.detached(priority: .userInitiated) {
+        var updated = try renderer(decodedSource, mode, transform)
+        if let preservedDelays {
+          for (index, milliseconds) in preservedDelays.enumerated() {
+            try updated.setSourceDelay(milliseconds: milliseconds, at: index)
+          }
+        }
+        return updated
+      }.value
+
+      guard revision == sourceTransformRevision, project == currentProject else {
+        succeed(
+          "The source view or project changed while rendering; the newer local edit was kept unapplied."
+        )
+        refreshPreview()
+        return
+      }
+
+      project = rendered
+      sourceRenderedProject = rendered
+      appliedResizeMode = mode
+      appliedFillOffsetX = fillOffsetX
+      appliedFillOffsetY = fillOffsetY
+      selectedFrameIndex = min(selectedFrameIndex, rendered.frames.count - 1)
+      refreshPreview()
+      succeed("Applied the exact 240×135 source view to every original frame.")
     } catch {
       fail(error)
     }
@@ -1489,7 +2207,7 @@ final class DisplayAnimationEditorModel: ObservableObject {
   }
 
   func exportEditedGIF() async {
-    guard let project else { return }
+    guard let project, !hasPendingSourceTransform else { return }
     let panel = NSSavePanel()
     panel.allowedContentTypes = [.gif]
     panel.nameFieldStringValue =
@@ -1505,6 +2223,7 @@ final class DisplayAnimationEditorModel: ObservableObject {
       }.value
       try data.write(to: url, options: .atomic)
       lastExportedProject = project
+      hasExportedPreparedSource = true
       succeed("Exported an edited GIF without changing the library source.")
     } catch {
       fail(error)
@@ -1512,7 +2231,7 @@ final class DisplayAnimationEditorModel: ObservableObject {
   }
 
   func exportLCDContainer() async {
-    guard let project else { return }
+    guard let project, !hasPendingSourceTransform else { return }
     let panel = NSSavePanel()
     panel.allowedContentTypes = [UTType.data]
     panel.nameFieldStringValue =
@@ -1543,6 +2262,13 @@ final class DisplayAnimationEditorModel: ObservableObject {
   }
 
   func containerExportHelp(language: AppLanguage) -> String {
+    if hasPendingSourceTransform {
+      return studioText(
+        "먼저 크롭 미리보기의 ‘이 화면 적용’을 눌러주세요.",
+        "Apply the crop preview to the project first.",
+        language: language
+      )
+    }
     guard canEncodeDeviceContainer else {
       return studioText(
         "모든 소스 지연을 0…511 ms로 맞춰야 byte wrap 없이 인코딩할 수 있습니다.",
@@ -1572,6 +2298,25 @@ final class DisplayAnimationEditorModel: ObservableObject {
     )
   }
 
+  private var currentAspectFillTransform: AK47LCDAspectFillTransform? {
+    try? AK47LCDAspectFillTransform.sourcePixels(
+      x: Double(fillOffsetX),
+      y: Double(fillOffsetY)
+    )
+  }
+
+  private func clampAspectFillOffsetsIfNeeded() {
+    guard let layout = aspectFillLayout else { return }
+    fillOffsetX = min(
+      layout.sourcePixelOffsetXRange.upperBound,
+      max(layout.sourcePixelOffsetXRange.lowerBound, fillOffsetX)
+    )
+    fillOffsetY = min(
+      layout.sourcePixelOffsetYRange.upperBound,
+      max(layout.sourcePixelOffsetYRange.lowerBound, fillOffsetY)
+    )
+  }
+
   private func mutateProject(
     showSuccess: Bool = true,
     _ mutation: (inout AK47LCDAnimationProject) throws -> Void
@@ -1592,15 +2337,64 @@ final class DisplayAnimationEditorModel: ObservableObject {
   }
 
   private func refreshPreview() {
-    guard let project, let frame = project.frames[safe: selectedFrameIndex],
-      let cgImage = frame.image.makeCGImage()
-    else {
+    refreshSourceOverview()
+
+    let outputImage: AK47LCDRGBAImage?
+    if hasPendingSourceTransform, let sourceFrame = selectedDecodedSourceFrame {
+      do {
+        if resizeMode == .aspectFill, let layout = aspectFillLayout {
+          outputImage = try sourceFrame.image.renderedForDevice(aspectFillLayout: layout)
+        } else {
+          outputImage = try sourceFrame.image.renderedForDevice(mode: resizeMode)
+        }
+      } catch {
+        outputImage = nil
+        fail(error)
+      }
+    } else {
+      outputImage = project?.frames[safe: selectedFrameIndex]?.image
+    }
+
+    guard let outputImage, let cgImage = outputImage.makeCGImage() else {
+      previewFrameImage = nil
       previewImage = nil
       return
     }
+    previewFrameImage = outputImage
     previewImage = NSImage(
       cgImage: cgImage,
       size: NSSize(width: AK47LCDFormat.canvasWidth, height: AK47LCDFormat.canvasHeight)
+    )
+  }
+
+  private var selectedDecodedSourceFrame: AK47LCDDecodedGIFFrame? {
+    guard let decodedSource, let sourceIndex = selectedDecodedSourceFrameIndex else { return nil }
+    return decodedSource.frames[sourceIndex]
+  }
+
+  private var selectedDecodedSourceFrameIndex: Int? {
+    guard let decodedSource, !decodedSource.frames.isEmpty else { return nil }
+    return min(selectedFrameIndex, decodedSource.frames.count - 1)
+  }
+
+  private func refreshSourceOverview() {
+    guard let sourceIndex = selectedDecodedSourceFrameIndex,
+      let sourceFrame = selectedDecodedSourceFrame
+    else {
+      sourceOverviewFrameIndex = nil
+      sourceOverviewImage = nil
+      return
+    }
+    guard sourceOverviewFrameIndex != sourceIndex || sourceOverviewImage == nil else { return }
+    guard let cgImage = sourceFrame.image.makeCGImage() else {
+      sourceOverviewFrameIndex = nil
+      sourceOverviewImage = nil
+      return
+    }
+    sourceOverviewFrameIndex = sourceIndex
+    sourceOverviewImage = NSImage(
+      cgImage: cgImage,
+      size: NSSize(width: sourceFrame.image.width, height: sourceFrame.image.height)
     )
   }
 

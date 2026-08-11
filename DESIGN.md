@@ -15,14 +15,22 @@ boundary; this is not presented as a strict two-team clean-room project.
    system components and project-authored visuals.
 4. **Local profiles** store editor values in Application Support. Selecting,
    editing or saving a profile does not call device transport.
-5. **Display authoring** decodes bounded local GIF input, edits frames, order,
-   delay, crop/fit/fill/stretch, simple project-authored bitmap text and pen
-   strokes, and exports an edited GIF. The independent device-container encoder
+5. **Display authoring** uses one inline workspace for bounded local
+   PNG/JPEG/GIF and movie input. Images open directly; a movie first selects a
+   time range and integer frame rate, then enters the same frame editor. It
+   edits order, delay, crop/fit/fill/stretch, simple project-authored bitmap text
+   and pen strokes, and exports an edited GIF. The visible output is always the
+   exact 240×135 (16:9) device canvas; library/study and device-recovery tools
+   remain collapsed secondary panels. The independent device-container encoder
    composites opaque 240×135 frames, writes little-endian RGB565 after a
    256-byte header, and pads exact 4,096-byte pages with `0xFF`. Source delays
    must be `0...511` ms and the encoder rejects byte wrapping. The 140-frame and
    2,215-page limits are host-side software ceilings, not proven physical flash
-   boundaries. Editing and file export perform no HID I/O.
+   boundaries. Editing and file export perform no HID I/O. Image/GIF storage
+   uses the exact immutable bytes that were inspected. Video is copied from a
+   nonblocking no-follow regular-file descriptor to a private snapshot, forbids
+   referenced media, validates every track, and applies raw and retained decode
+   work limits before the snapshot can enter the editor.
 6. **Offline trace analysis** decodes a deliberately selected, size-limited
    JSON file and performs pure summary and comparison. It does not capture,
    hook, replay, communicate with hardware, upload input or infer commands.

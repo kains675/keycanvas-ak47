@@ -86,11 +86,13 @@ backfill하지 않으므로 그전까지 UI는 잠깁니다. 아래에서
 | --- | --- | --- | --- | --- |
 | 240×135 화면 구성 | 독자 SwiftUI 도형으로 문구·강조색·시계·배터리 예시를 로컬 미리보기하고 프로필에 저장 | 부분 구현 | 정확한 글꼴/합성 결과의 파일 렌더링과 레이어 편집 | L |
 | PNG/JPEG/GIF 불러오기 | 파일 내용을 ImageIO로 다시 확인하고 240×135 캔버스에서 정지 이미지 또는 전체 GIF 프레임을 재생·탐색 | 구현 | 색 관리와 더 정밀한 재생 진단 | L |
+| 로컬 영상 불러오기 | 같은 `불러오기…`가 AVFoundation-readable MP4/MOV/M4V를 자동 판별하고, 기본 3초·10fps 구간과 예상 프레임·작업량을 확인한 뒤 최대 140개 source frame을 기존 inline 편집기로 전달. 원본과 네트워크는 건드리지 않고 편집 GIF로만 보존 | 구현 | VFR별 고급 sampling 선택과 색 공간 진단 | L |
+| 인라인 편집 작업 공간 | Display의 기본 흐름을 불러오기→편집→적용으로 단순화하고, 보관함·재생 목록·시안 및 장치 실험·자격·복구는 기본 접힘 보조 영역으로 유지 | 구현 | 사용자별 작업 공간 배치 저장 | L |
 | 이미지 메타데이터 | 원본 픽셀 크기·프레임 수·지연·재생 시간과 로컬 컨테이너 예상치를 표시하며 과도한 크기·프레임 수·파일 용량·작업량을 거부 | 구현 | 색 공간 표시와 decode 메모리 진단 | L |
-| 자산 보관과 재생 목록 | 원본은 바꾸지 않고 앱 전용 폴더에 고유 이름으로 복사해 프로필 `assets`/`playlist`에 연결하고 순서 이동·목록 제거를 지원 | 구현 | 사용하지 않는 로컬 복사본 정리와 다중 선택 | L |
+| 자산 보관과 재생 목록 | 이미지/GIF는 검사·decode에 사용한 동일 immutable bytes를 앱 전용 폴더의 고유 이름으로 저장해 프로필 `assets`/`playlist`에 연결하고 순서 이동·목록 제거를 지원. 영상 원본은 보관함에 넣지 않음 | 구현 | 사용하지 않는 로컬 복사본 정리와 다중 선택 | L |
 | 이미지 내보내기 | 선택한 로컬 복사본을 사용자가 고른 위치로 내보냄 | 구현 | 이름 충돌 안내와 여러 파일 내보내기 | L |
 | Windows 로컬 화면 자산 가져오기 | 사용자가 선택한 `Archon AK47 Driver Files` 폴더의 SQLite DB를 읽기 전용으로 제한 조회하고, 검증된 PNG 레이어의 원본 픽셀 크기·순서·delay를 보존한 GIF와 독자 프로필로 가져옴 | 구현 | 여러 레이어 재생 순서 편집과 가져오기 미리보기 | L |
-| 프레임·그리기·텍스트 편집 | GIF 프레임 추가·삭제·복제·순서 이동, 0…511ms 지연, crop/fit/fill/stretch, 독자 bitmap text·pen 편집과 GIF 내보내기 | 구현 | undo/redo, 다중 프레임 일괄 편집, 고급 도구 | L |
+| 프레임·그리기·텍스트 편집 | 이미지/GIF/영상 추출 프레임의 추가·삭제·복제·순서 이동, 0…511ms 지연, 독자 bitmap text·pen 편집과 GIF 내보내기. 실제 LCD와 같은 240×135·16:9 canvas에서 fit/fill/crop/stretch를 비파괴로 즉시 미리보고, fill/crop의 원본 viewport를 X/Y 1px·10px 화살표와 crop map으로 조정한 뒤 전체 원본 프레임에 명시적으로 적용 | 구현 | undo/redo, 서로 다른 원본의 프레임별 crop, 고급 도구 | L |
 | 240×135 RGB565 컨테이너 | 완전히 합성한 opaque 프레임을 little-endian RGB565로 만들고 256바이트 header와 `0xFF`로 채운 정확한 4096바이트 page를 로컬 파일로 내보냄. 1…140프레임·최대 2215페이지와 지연 byte wrap을 검증 | 구현 | 이 host-side ceiling은 물리 SPI partition 끝이나 안전한 장치 용량을 증명하지 않음 | L |
 | 시간 동기화 | 장치 검사기에서 별도 확인 뒤 현재 Mac의 로컬 날짜·시각을 첫 번째 시계 슬롯에 한 번 전송. ACK가 정의된 단계를 검증하고 자동 재시도하지 않음. 수정된 트랜잭션의 단발 실기 성공 | 부분 구현 | 장치의 현재 시각 readback, 정확한 이전 값 복원과 자동 rollback, 화면의 육안 시각 확인은 없음 | W |
 | LCD 이미지 장치 전송 | 고정 모서리 4색 1프레임·16페이지·exact SHA bootstrap과, Core의 target-bound durable qualification을 모두 마친 뒤 현재 in-memory editor 값을 복사한 불변 1…40프레임 exact plan을 보내는 별도 경로를 구현. final sheet가 target/frame/page/bytes/address/SHA/delay를 표시하고 일회용 승인을 plan에 bind | 실험적 부분 구현 | production receipt는 빈 상태에서 시작하고 과거 실기를 import/backfill하지 않음. bootstrap host 성공→모서리 육안 확인→USB-mode cable removal real absence→원래 port exact4 재등장→완전 무전원 attestation 순서를 강제. 각 qualified host 성공 뒤에도 exact submitted RGB565 preview 육안 확인 전에는 잠기며, 틀림/확인 불가는 retryable pending을 거쳐 quarantine+자격 폐기. readback/backup/rollback 없음, >40 live와 raw payload는 잠금 | W + U |

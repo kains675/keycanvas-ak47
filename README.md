@@ -42,9 +42,14 @@ KeyCanvas는 **ARCHON AK47 non-PRO**를 위한 독립 오픈소스 macOS 앱입�
   상태 기반 논리 미리보기
 - 실제 84키 위치와 RGB 슬롯을 사용하는 키별 색상 페인터
 - 유효성을 검사하는 매크로 초안
-- 240×135 디스플레이 구성과 전체 GIF 프레임 재생·탐색
-- GIF 프레임 추가·삭제·복제·순서·지연·crop/fit/fill/stretch, 간단한 bitmap
-  text·pen 편집과 편집 GIF 내보내기
+- Display 탭의 기본 흐름을 **불러오기 → 편집 → 적용**으로 단순화하고, 보관함·시안과
+  장치 실험·복구 도구는 접힌 보조 영역으로 유지
+- 단일 `불러오기…`에서 PNG/JPEG/GIF는 즉시, 로컬 MP4/MOV/M4V는 시작·끝 구간과
+  2…60fps를 고른 뒤 같은 240×135 inline 편집기로 연결
+- 이미지·영상 프레임 추가·삭제·복제·순서·지연, 간단한 bitmap text·pen 편집과 편집
+  GIF 내보내기. 실제 LCD와 같은 240×135·16:9 출력 미리보기에서 fit/fill/crop/
+  stretch를 즉시 비교하고, fill/crop은 원본 크롭 지도와 X/Y 1px·10px 화살표로
+  잘릴 영역을 조정한 뒤 전체 원본 프레임에 명시적으로 적용
 - 240×135 opaque RGB565 프레임, 256바이트 header, `0xFF`로 채운 4096바이트
   page로 이루어진 검증된 LCD 컨테이너의 **로컬 파일 내보내기**
 - exact `bcdDevice 0x0115` 대상에서만 별도 확인 후 실행하는 고정 모서리 4색
@@ -107,13 +112,28 @@ Windows 백업에는 사용자 이미지, 컴퓨터 이름, 장치 식별자 또
 포함될 수 있습니다. 원본 백업이나 `analysis/` 폴더를 저장소, Issue, PR 또는
 Release에 올리지 마세요.
 
-GIF 편집기는 로컬 복사본에서만 작업하며 원본 파일을 덮어쓰지 않습니다. 장치용
+통합 Display 편집기는 원본 이미지·GIF·영상을 덮어쓰지 않습니다. 이미지와 GIF는
+검사·decode한 동일한 immutable bytes를 앱 전용 보관함에 저장하고, 영상은 안전한
+임시 snapshot에서 고른 구간을 프레임으로 추출해 메모리에서 편집합니다. 영상 결과는
+GIF로 내보내야 다음 실행에서도 보존됩니다. 장치용
 컨테이너는 완전히 합성한 240×135 프레임을 little-endian RGB565로 변환하고,
 1…140프레임·최대 2215페이지·0…511ms source delay와 header/page padding을
 검사합니다. 이 범위는 host-side 소프트웨어 ceiling일 뿐 키보드의 실제 SPI
 partition 끝이나 안전한 복구 가능 용량을 증명하지 않습니다. live 전송은 이 범위와
 분리되어 있으며 새 durable qualification의 시작은 프로젝트가 직접 만든 1프레임
 진단 fixture 하나로만 제한됩니다.
+
+로컬 영상 가져오기는 AVFoundation이 읽을 수 있는 regular file만 대상으로 하며
+네트워크 URL·YouTube·다운로드·shell/ffmpeg를 사용하지 않습니다. 기본 3초·10fps,
+최대 140프레임과 source/retained decoded-work 한도를 먼저 계산하고, 선택 구간의
+프레임만 off-main에서 추출해 기존 fit/fill/crop/stretch 편집기로 넘깁니다. 영상
+원본은 보관함 자산으로 위장하거나 수정하지 않으며, 메모리의 영상 프레임은 편집
+GIF로 내보내야 보존됩니다. 검사와 추출은 사용자가 고른 파일을 한 번 읽어 만든
+private temporary snapshot을 공유하고 외부 media reference를 금지합니다. deadline은
+호출자에게 제한 시간 안에 반환한 뒤 AVFoundation 취소를 요청하는 best-effort
+경계이며 별도 helper process를 강제 종료하는 방식은 아닙니다. 정상 해제 때 snapshot을
+지우지만 앱이 비정상 종료되면 OS가 temporary directory를 정리할 때까지 남을 수
+있습니다.
 240×135 검정 바탕에 좌상 빨강·우상 초록·좌하 파랑·우하 흰색 32×32 블록이
 있고, 정확히 16×4096바이트 page와 SHA-256
 `312f98fd023d49711f73a677895b1bf48ac246c7dd687c813ed5642f42128bec`를 가져야
