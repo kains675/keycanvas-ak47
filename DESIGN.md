@@ -239,7 +239,9 @@ partially changed subset, so it remains an inspection-only model.
 
 The separate default-off LCD bootstrap is not a general content-write allowlist.
 A matching one-use authorization binds the exact target and fixed fixture after
-four risk acknowledgements and a separate destructive confirmation. Before any
+one explicit experimental-feature risk acknowledgement and its destructive
+Apply. The qualified editor path presents that same single acknowledgement while
+retaining its independently exact, one-use plan authorization. Before any
 HID path, Core also claims a durable canonical-transfer lease. The adapter opens
 one unique FF13 command and FF68 bulk collection non-exclusively, rejects any
 other bootstrap hash/frame/page count, submits exactly 16 Output reports, and

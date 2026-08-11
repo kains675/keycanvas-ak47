@@ -44,8 +44,10 @@ KeyCanvas는 **ARCHON AK47 non-PRO**를 위한 독립 오픈소스 macOS 앱입�
 - 유효성을 검사하는 매크로 초안
 - Display 탭의 기본 흐름을 **불러오기 → 편집 → 적용**으로 단순화하고, 보관함·시안과
   장치 실험·복구 도구는 접힌 보조 영역으로 유지
-- 단일 `불러오기…`에서 PNG/JPEG/GIF는 즉시, 로컬 MP4/MOV/M4V는 시작·끝 구간과
-  2…60fps를 고른 뒤 같은 240×135 inline 편집기로 연결
+- 단일 `불러오기…`에서 PNG/JPEG/GIF는 즉시, 로컬 MP4/MOV/M4V는 음소거 영상
+  미리보기와 재생·일시정지, 하나의 양끝 trim timeline, `HH:MM:SS.mmm` 시간코드로
+  시작·끝 구간과 2…60fps를 고른 뒤 같은 240×135 inline 편집기로 연결. 초점을 둔
+  핸들·재생 헤드는 `←`/`→`로 선택 FPS의 출력 sample 한 칸씩 이동
 - 이미지·영상 프레임 추가·삭제·복제·순서·지연, 간단한 bitmap text·pen 편집과 편집
   GIF 내보내기. 실제 LCD와 같은 240×135·16:9 출력 미리보기에서 fit/fill/crop/
   stretch를 즉시 비교하고, fill/crop은 원본 크롭 지도와 X/Y 1px·10px 화살표로
@@ -125,8 +127,13 @@ partition 끝이나 안전한 복구 가능 용량을 증명하지 않습니다.
 
 로컬 영상 가져오기는 AVFoundation이 읽을 수 있는 regular file만 대상으로 하며
 네트워크 URL·YouTube·다운로드·shell/ffmpeg를 사용하지 않습니다. 기본 3초·10fps,
-최대 140프레임과 source/retained decoded-work 한도를 먼저 계산하고, 선택 구간의
-프레임만 off-main에서 추출해 기존 fit/fill/crop/stretch 편집기로 넘깁니다. 영상
+최대 140프레임과 source/retained decoded-work 한도를 먼저 계산합니다. 선택 sheet는
+같은 private snapshot의 음소거 preview를 재생하고, 하나의 timeline에서 시작·끝
+handle과 playhead를 함께 보여 줍니다. 모든 시각은 `HH:MM:SS.mmm`로 표시하며, 방향키는
+선택한 출력 FPS의 drift 없는 sample grid를 이동합니다. VFR 원본에서 실제로 추출되는
+화면은 각 sample 시각에 가장 가까운 source frame이므로 이를 원본의 exact frame-step으로
+표현하지 않습니다. 선택 구간의 프레임만 off-main에서 추출해 기존
+fit/fill/crop/stretch 편집기로 넘깁니다. 영상
 원본은 보관함 자산으로 위장하거나 수정하지 않으며, 메모리의 영상 프레임은 편집
 GIF로 내보내야 보존됩니다. 검사와 추출은 사용자가 고른 파일을 한 번 읽어 만든
 private temporary snapshot을 공유하고 외부 media reference를 금지합니다. deadline은

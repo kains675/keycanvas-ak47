@@ -9,7 +9,7 @@ final class LCDExperimentalTransferGateTests: XCTestCase {
     XCTAssertEqual(LCDExperimentalTransferGate.expectedAcknowledgementCount, 16)
   }
 
-  func testAdapterTargetOperationAndEveryRiskAcknowledgementAreRequired() {
+  func testAdapterTargetOperationAndSingleRiskAcknowledgementAreRequired() {
     var gate = fullyAcknowledgedGate()
 
     XCTAssertFalse(
@@ -31,7 +31,7 @@ final class LCDExperimentalTransferGateTests: XCTestCase {
         deviceOperationAllowed: false
       ))
 
-    gate.confirmsColdRecoveryIsPrepared = false
+    gate.applyAcknowledgement.isAcknowledged = false
     XCTAssertFalse(
       gate.canRequestOneFrameUpload(
         adapterLinked: true,
@@ -122,10 +122,7 @@ final class LCDExperimentalTransferGateTests: XCTestCase {
 
   private func fullyAcknowledgedGate() -> LCDExperimentalTransferGate {
     var gate = LCDExperimentalTransferGate()
-    gate.acknowledgesCurrentImageOverwrite = true
-    gate.acknowledgesNoReadbackOrRollback = true
-    gate.confirmsOtherUtilitiesAndVMsAreClosed = true
-    gate.confirmsColdRecoveryIsPrepared = true
+    gate.applyAcknowledgement.isAcknowledged = true
     return gate
   }
 

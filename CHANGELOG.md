@@ -15,6 +15,10 @@
   start/end/FPS sampler before entering the same fit/fill/crop/text/pen flow.
   Video sources are snapshotted locally, forbid external media references,
   stay out of the asset library, and require edited-GIF export for retention.
+- Added an in-sheet muted video preview with Play/Pause, a single dual-handle
+  trim timeline, an independent playhead, fixed `HH:MM:SS.mmm` timecodes and
+  keyboard output-sample stepping. Selected-range playback stops at the active
+  end boundary, and stale seek or replaced-boundary callbacks are ignored.
 - Simplified the main Display surface to Import → edit → Apply and moved the
   existing library/study and device qualification/recovery tools into collapsed
   secondary sections.
@@ -55,11 +59,12 @@
   confirms no other process is active, Core persists a retryable interruption
   state, arms the target's durable quarantine marker and invalidates
   qualification without ever restoring the old lease as success.
-- Added four visible risk acknowledgements, a separate destructive one-use
-  plan-bound authorization, exact FF13/FF68 collection selection, one Feature
-  and one Output call site, 16 required Output-completion/input-report
+- Consolidated the canonical and qualified LCD Apply surfaces onto one shared
+  experimental-feature risk acknowledgement and a destructive one-use Apply.
+  Exact plan-bound authorization, FF13/FF68 collection selection, the one
+  Feature and one Output call site, required Output-completion/input-report
   sequences, no retry, exact postflight and durable partial-transaction
-  quarantine to the experimental LCD path.
+  quarantine remain unchanged.
 - Completed an explicitly authorized fixed-fixture macOS evidence trial: all 16
   Output completions elicited the expected input sequence, commit and exact
   postflight completed, and the user visually confirmed the red/green/blue/

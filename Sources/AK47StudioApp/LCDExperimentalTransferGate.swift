@@ -11,18 +11,14 @@ struct LCDExperimentalTransferGate: Equatable {
   static let expectedOutputEndpoint: UInt8 = 0x03
   static let expectedInputEndpoint: UInt8 = 0x84
   static let expectedAcknowledgementCount = 16
-  var acknowledgesCurrentImageOverwrite = false
-  var acknowledgesNoReadbackOrRollback = false
-  var confirmsOtherUtilitiesAndVMsAreClosed = false
-  var confirmsColdRecoveryIsPrepared = false
+  var applyAcknowledgement = LCDExperimentalApplyAcknowledgement()
 
-  private(set) var confirmationWasConsumed = false
+  var confirmationWasConsumed: Bool {
+    applyAcknowledgement.wasConsumed
+  }
 
-  var hasAllRiskAcknowledgements: Bool {
-    acknowledgesCurrentImageOverwrite
-      && acknowledgesNoReadbackOrRollback
-      && confirmsOtherUtilitiesAndVMsAreClosed
-      && confirmsColdRecoveryIsPrepared
+  var hasRequiredAcknowledgement: Bool {
+    applyAcknowledgement.isAcknowledged
   }
 
   func canRequestOneFrameUpload(
@@ -33,8 +29,7 @@ struct LCDExperimentalTransferGate: Equatable {
     adapterLinked
       && exactTargetReady
       && deviceOperationAllowed
-      && hasAllRiskAcknowledgements
-      && !confirmationWasConsumed
+      && applyAcknowledgement.canApply
   }
 
   /// Consumes the one and only approval in this UI session.
@@ -52,8 +47,7 @@ struct LCDExperimentalTransferGate: Equatable {
     else {
       return false
     }
-    confirmationWasConsumed = true
-    return true
+    return applyAcknowledgement.consume()
   }
 
 }
@@ -101,7 +95,6 @@ struct LCDExperimentalTransferCard: View {
   let onBeginOneFrameUpload: () -> Void
 
   @State private var gate = LCDExperimentalTransferGate()
-  @State private var showsFinalConfirmation = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
@@ -169,38 +162,11 @@ struct LCDExperimentalTransferCard: View {
       Divider()
 
       VStack(alignment: .leading, spacing: 10) {
-        Toggle(isOn: $gate.acknowledgesCurrentImageOverwrite) {
+        Toggle(isOn: $gate.applyAcknowledgement.isAcknowledged) {
           Text(
             studioText(
-              "현재 LCD 사용자 이미지를 덮어쓴다는 것을 이해했습니다.",
-              "I understand this overwrites the current user LCD image.",
-              language: language
-            )
-          )
-        }
-        Toggle(isOn: $gate.acknowledgesNoReadbackOrRollback) {
-          Text(
-            studioText(
-              "현재 이미지를 읽어 오거나 자동으로 되돌리는 기능이 없음을 이해했습니다.",
-              "I understand there is no current-image readback or automatic rollback.",
-              language: language
-            )
-          )
-        }
-        Toggle(isOn: $gate.confirmsOtherUtilitiesAndVMsAreClosed) {
-          Text(
-            studioText(
-              "Windows 제조사 프로그램, 다른 키보드 도구와 USB를 쓰는 가상 머신을 모두 닫았습니다.",
-              "I closed the Windows vendor app, other keyboard utilities, and USB-using VMs.",
-              language: language
-            )
-          )
-        }
-        Toggle(isOn: $gate.confirmsColdRecoveryIsPrepared) {
-          Text(
-            studioText(
-              "실패 시 selector를 USB 위치에 둔 채 케이블을 분리하고 LCD·LED가 완전히 꺼진 상태에서 실제 열거 0개를 확인하겠습니다.",
-              "If it fails, I will keep the selector in USB mode, disconnect the cable, verify the LCD and LEDs are fully off, and refresh until real enumeration shows zero matching collections.",
+              LCDExperimentalApplyAcknowledgement.koreanText,
+              LCDExperimentalApplyAcknowledgement.englishText,
               language: language
             )
           )
@@ -211,10 +177,17 @@ struct LCDExperimentalTransferCard: View {
 
       HStack(spacing: 12) {
         Button(role: .destructive) {
-          showsFinalConfirmation = true
+          guard
+            gate.consumeOneFrameConfirmation(
+              adapterLinked: adapterLinked,
+              exactTargetReady: exactTargetReady,
+              deviceOperationAllowed: deviceOperationAllowed
+            )
+          else { return }
+          onBeginOneFrameUpload()
         } label: {
           Label(
-            studioText("1프레임 실기 승인…", "Approve one-frame experiment…", language: language),
+            studioText("1프레임 실기 적용", "Apply one-frame experiment", language: language),
             systemImage: "display.and.arrow.down"
           )
         }
@@ -241,38 +214,6 @@ struct LCDExperimentalTransferCard: View {
       .foregroundStyle(.secondary)
     }
     .studioPanel()
-    .confirmationDialog(
-      studioText(
-        "현재 LCD 이미지를 1프레임 진단 화면으로 덮어쓸까요?",
-        "Overwrite the current LCD image with the one-frame diagnostic?",
-        language: language
-      ),
-      isPresented: $showsFinalConfirmation,
-      titleVisibility: .visible
-    ) {
-      Button(
-        studioText("한 번만 전송", "Upload once", language: language),
-        role: .destructive
-      ) {
-        guard
-          gate.consumeOneFrameConfirmation(
-            adapterLinked: adapterLinked,
-            exactTargetReady: exactTargetReady,
-            deviceOperationAllowed: deviceOperationAllowed
-          )
-        else { return }
-        onBeginOneFrameUpload()
-      }
-      Button(studioText("취소", "Cancel", language: language), role: .cancel) {}
-    } message: {
-      Text(
-        studioText(
-          "재시도 없이 Output 16개를 제출하고 각 완료 뒤 예상한 input report를 검증합니다. input에는 page index가 없어 flash 수락을 증명하지 않습니다. 실패하면 다른 장치 작업을 중단하고 selector를 USB 위치에 둔 채 케이블을 분리해 LCD·LED가 완전히 꺼지고 실제 열거가 0이 되는지 확인해야 합니다.",
-          "This submits 16 Outputs without retry and validates the expected input report after each completion. The input has no page index and does not prove flash acceptance. On failure, stop other device operations, keep the selector in USB mode, disconnect the cable, and verify that the LCD and LEDs turn fully off and real enumeration reaches zero.",
-          language: language
-        )
-      )
-    }
   }
 
   @ViewBuilder
@@ -393,15 +334,18 @@ struct LCDExperimentalTransferCard: View {
         language: language
       )
     }
-    if !gate.hasAllRiskAcknowledgements {
+    if !gate.hasRequiredAcknowledgement {
       return studioText(
-        "위 네 가지 안전 확인이 모두 필요합니다.",
-        "All four safety acknowledgements are required.",
+        "실험 기능 위험 확인이 필요합니다.",
+        "The experimental-feature risk acknowledgement is required.",
         language: language
       )
     }
     return studioText(
-      "마지막 확인 후 한 번만 실행합니다.", "Runs once after final confirmation.", language: language)
+      "이 확인은 한 번의 적용에만 유효합니다.",
+      "This acknowledgement is valid for one Apply only.",
+      language: language
+    )
   }
 
   private var diagnosticPreview: some View {

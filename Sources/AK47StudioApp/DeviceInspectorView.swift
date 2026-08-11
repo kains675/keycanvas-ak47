@@ -165,8 +165,8 @@ struct DeviceInspectorView: View {
         .font(.headline)
         Text(
           studioText(
-            "읽기 전용 report 진단은 GetReport만 호출합니다. F5 RGB 조회와 시계·조명 적용은 서로 다른 확인이 필요합니다. Display의 고정 1프레임 LCD bootstrap은 4개 risk 확인과 별도 최종 승인 뒤 output을 사용하며, fresh 영속 자격을 모두 마친 exact 대상만 현재 editor의 불변 1…40프레임 plan을 별도 승인할 수 있습니다. 기본값 계획은 Settings dry-run이고 raw LCD payload·키맵·매크로·펌웨어·부트로더 live 작업은 없습니다.",
-            "The read-only report probe calls GetReport only. F5 RGB and clock or lighting apply require distinct confirmations. Display's fixed one-frame LCD bootstrap uses Output only after four risk acknowledgements and a separate final approval; only an exact target with fresh durable qualification may separately authorize an immutable 1...40-frame current-editor plan. Default-plan inspection is a Settings dry run, and there is no raw LCD payload, keymap, macro, firmware, or bootloader live operation.",
+            "읽기 전용 report 진단은 GetReport만 호출합니다. F5 RGB 조회와 시계·조명 적용은 서로 다른 확인이 필요합니다. Display의 고정 1프레임 LCD bootstrap과 fresh 영속 자격을 마친 현재 editor의 불변 1…40프레임 plan은 각각 동일한 단일 실험 기능 위험 확인 뒤 한 번만 적용할 수 있습니다. 기본값 계획은 Settings dry-run이고 raw LCD payload·키맵·매크로·펌웨어·부트로더 live 작업은 없습니다.",
+            "The read-only report probe calls GetReport only. F5 RGB and clock or lighting apply require distinct confirmations. Display's fixed one-frame LCD bootstrap and an immutable 1...40-frame current-editor plan with fresh durable qualification may each be applied once after the same single experimental-feature risk acknowledgement. Default-plan inspection is a Settings dry run, and there is no raw LCD payload, keymap, macro, firmware, or bootloader live operation.",
             language: language
           )
         )

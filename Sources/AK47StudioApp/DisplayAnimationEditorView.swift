@@ -1302,12 +1302,7 @@ private struct LCDQualifiedUploadConfirmationSheet: View {
   let snapshot: LCDQualifiedAnimationSnapshot
   let onConfirm: () -> Void
 
-  @State private var acknowledgesOverwrite = false
-  @State private var acknowledgesNoReadbackOrRollback = false
-  @State private var acknowledgesInputsAreNotAcceptance = false
-  @State private var confirmsLongTransferSafety = false
-  @State private var confirmsRecoveryPrepared = false
-  @State private var confirmationConsumed = false
+  @State private var applyAcknowledgement = LCDExperimentalApplyAcknowledgement()
 
   var body: some View {
     ScrollView {
@@ -1427,47 +1422,18 @@ private struct LCDQualifiedUploadConfirmationSheet: View {
           .padding(.top, 6)
         }
 
-        GroupBox(studioText("필수 위험 확인", "Required risk acknowledgements", language: language)) {
+        GroupBox(
+          studioText(
+            "실험 기능 확인", "Experimental feature acknowledgement", language: language)
+        ) {
           VStack(alignment: .leading, spacing: 10) {
             riskToggle(
               studioText(
-                "현재 LCD 사용자 이미지를 이 snapshot으로 덮어씁니다.",
-                "This snapshot overwrites the current user LCD image.",
+                LCDExperimentalApplyAcknowledgement.koreanText,
+                LCDExperimentalApplyAcknowledgement.englishText,
                 language: language
               ),
-              isOn: $acknowledgesOverwrite
-            )
-            riskToggle(
-              studioText(
-                "현재 이미지를 읽어 오거나 backup·rollback하는 기능이 없습니다.",
-                "There is no current-image readback, backup, or rollback.",
-                language: language
-              ),
-              isOn: $acknowledgesNoReadbackOrRollback
-            )
-            riskToggle(
-              studioText(
-                "페이지마다 예상 input을 확인하지만 page/flash 수락이나 화면 결과 증명은 아닙니다.",
-                "An expected input is checked after every page, but it is not page/flash acceptance or visible-result proof.",
-                language: language
-              ),
-              isOn: $acknowledgesInputsAreNotAcceptance
-            )
-            riskToggle(
-              studioText(
-                "장기 전송 동안 앱 종료·Mac sleep/shutdown·케이블 분리를 피하고 다른 keyboard utility와 Windows VM을 닫았습니다.",
-                "During this long transfer I will avoid app quit, Mac sleep/shutdown, and cable removal, and I closed other keyboard utilities and Windows VMs.",
-                language: language
-              ),
-              isOn: $confirmsLongTransferSafety
-            )
-            riskToggle(
-              studioText(
-                "실패 시 재시도하지 않고 selector를 USB 위치에 둔 cable-removal→real absence→same-port exact4 복구를 진행합니다. 2.4G/BT 전환은 복구가 아닙니다.",
-                "On failure I will not retry; I will keep USB mode and perform cable removal → real absence → same-port exact-four recovery. Switching to 2.4G/BT is not recovery.",
-                language: language
-              ),
-              isOn: $confirmsRecoveryPrepared
+              isOn: $applyAcknowledgement.isAcknowledged
             )
           }
           .toggleStyle(.checkbox)
@@ -1490,13 +1456,12 @@ private struct LCDQualifiedUploadConfirmationSheet: View {
             studioText("이 snapshot 한 번 적용", "Apply this snapshot once", language: language),
             role: .destructive
           ) {
-            guard allRisksAcknowledged, !confirmationConsumed else { return }
-            confirmationConsumed = true
+            guard applyAcknowledgement.consume() else { return }
             onConfirm()
           }
           .buttonStyle(.borderedProminent)
           .tint(StudioPalette.coral)
-          .disabled(!allRisksAcknowledged || confirmationConsumed)
+          .disabled(!applyAcknowledgement.canApply)
         }
       }
       .padding(24)
@@ -1505,14 +1470,6 @@ private struct LCDQualifiedUploadConfirmationSheet: View {
   }
 
   private var summary: AK47LCDQualifiedUploadPlanSummary { snapshot.summary }
-
-  private var allRisksAcknowledged: Bool {
-    acknowledgesOverwrite
-      && acknowledgesNoReadbackOrRollback
-      && acknowledgesInputsAreNotAcceptance
-      && confirmsLongTransferSafety
-      && confirmsRecoveryPrepared
-  }
 
   private var oddDelayFrameIndices: [Int] {
     snapshot.plan.container.sourceDelaysMilliseconds.enumerated().compactMap {

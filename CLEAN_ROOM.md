@@ -215,10 +215,11 @@ report sequences and descriptor roles needed for interoperability. The raw
 captures and their payloads remain private and are not public fixtures.
 
 The concrete macOS adapter remains default-off. Its bootstrap path accepts only
-the fixed project-authored fixture above after an exact-target preflight, four
-explicit risk acknowledgements and a separate matching one-use destructive
-confirmation. Its qualified path independently requires the completed durable
-receipt and an exact one-use editor-snapshot authorization. Both submit each
+the fixed project-authored fixture above after an exact-target preflight, one
+explicit experimental-feature risk acknowledgement and a matching one-use
+destructive Apply. Its qualified path uses the same single acknowledgement and
+independently requires the completed durable receipt plus an exact one-use
+editor-snapshot authorization. Both submit each
 page once, require the completed Output to elicit one valid 64-byte input report
 before continuing, perform no automatic retry and provide no readback, backup
 or rollback. Any submitted-but-uncertain transaction remains under the durable

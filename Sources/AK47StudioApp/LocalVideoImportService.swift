@@ -140,6 +140,26 @@ enum LocalVideoImportService {
     )
   }
 
+  /// Builds a preview player from the same private immutable snapshot used by
+  /// extraction. External media references stay forbidden and the original
+  /// user-selected path is never reopened for playback.
+  @MainActor
+  static func makePreviewPlayer(
+    descriptor: LocalVideoImportDescriptor
+  ) throws -> AVPlayer {
+    guard descriptor.snapshot.hasExpectedIdentity else {
+      throw LocalVideoImportError.sourceChanged
+    }
+    let asset = AVURLAsset(
+      url: descriptor.snapshot.fileURL,
+      options: secureAssetOptions
+    )
+    let player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
+    player.actionAtItemEnd = .pause
+    player.isMuted = true
+    return player
+  }
+
   private static func inspectSnapshot(
     _ snapshot: LocalVideoSnapshot,
     originalURL: URL

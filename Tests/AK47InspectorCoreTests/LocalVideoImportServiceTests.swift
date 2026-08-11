@@ -20,6 +20,13 @@ final class LocalVideoImportServiceTests: XCTestCase {
     // Extraction must use the exact private snapshot that was inspected, not
     // reopen a path that can be swapped between the two phases.
     try FileManager.default.removeItem(at: fixture.url)
+    let previewAssetURL = try await MainActor.run { () throws -> URL in
+      let player = try LocalVideoImportService.makePreviewPlayer(descriptor: descriptor)
+      let asset = try XCTUnwrap(player.currentItem?.asset as? AVURLAsset)
+      return asset.url
+    }
+    XCTAssertNotEqual(previewAssetURL, fixture.url)
+    XCTAssertTrue(FileManager.default.fileExists(atPath: previewAssetURL.path))
 
     let selection = try AK47LCDVideoSelection(
       startMilliseconds: 0,

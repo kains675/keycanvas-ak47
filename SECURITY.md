@@ -229,6 +229,14 @@ that never returns cannot be force-terminated in-process; a timed-out
 underlying task may finish later, but its result cannot enter the editor. Media
 replacement is bound to its originating profile/session and disables editor
 mutation and device Apply until the immutable result commits or is cancelled.
+The range selector's muted AVPlayer uses that same private snapshot with all
+external media references forbidden; it never reopens the original path. The
+controller requests the selected half-open interval and stops through both
+`forwardPlaybackEndTime` and a boundary observer; those controls do not promise
+a pixel-exact renderer hard cut. Seek/boundary generations prevent removed or
+cancelled callbacks from resuming or stopping a newer preview session. Preview
+cancellation is still cooperative and is not a hard-kill boundary for an
+unresponsive AVFoundation decoder.
 Keep private images and imported Windows data out of bug reports unless a
 minimal project-authored reproduction can replace them.
 
