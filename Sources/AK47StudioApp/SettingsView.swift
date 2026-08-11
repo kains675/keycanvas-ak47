@@ -13,6 +13,8 @@ struct SettingsView: View {
   @State private var reportRate = 1_000
   @State private var functionLayerEnabled = true
   @State private var deviceDraftSaved = false
+  @State private var inspectedFactoryResetPlan: AK47FactoryResetPlan?
+  @State private var factoryResetPreflightError: String?
 
   init(model: StudioModel) {
     self.model = model
@@ -31,6 +33,8 @@ struct SettingsView: View {
             language: language
           )
         )
+
+        DeviceQuarantineRecoveryCard(model: model)
 
         SettingsGroup(
           title: studioText("로컬 프로필", "Local profile", language: language),
@@ -210,6 +214,76 @@ struct SettingsView: View {
         }
 
         SettingsGroup(
+          title: studioText(
+            "기본값 계획 검사",
+            "Default-plan inspection",
+            language: language
+          ),
+          symbol: "arrow.counterclockwise.circle"
+        ) {
+          Text(
+            studioText(
+              "Windows 앱의 ‘공장초기화’와 관련된 세 category의 작업·ACK 수와 page 위험만 오프라인으로 점검합니다. 전체 초기화가 아니며 장치에는 보내지 않습니다.",
+              "This inspects only operation and ACK counts plus page-risk metadata for three categories related to the Windows app's factory-default workflow. It is not a complete reset and nothing is sent to the device.",
+              language: language
+            )
+          )
+          .font(.callout)
+          .foregroundStyle(.secondary)
+
+          VStack(alignment: .leading, spacing: 8) {
+            ForEach(AK47FactoryResetPreflight.categoryCatalog, id: \.category) { status in
+              HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: factoryResetStatusSymbol(status.availability))
+                  .foregroundStyle(factoryResetStatusTint(status.availability))
+                Text(factoryResetCategoryLabel(status.category))
+                Spacer(minLength: 12)
+                Text(factoryResetAvailabilityLabel(status.availability))
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+              }
+            }
+          }
+
+          Divider()
+
+          Text(
+            studioText(
+              "기능 설정 페이지 전체 백업, 정확한 bcdDevice 0x0115 실기 검증, 전원 재인가 후 복구 절차가 아직 없습니다. 그래서 실행 경로는 코드 수준에서 잠겨 있습니다.",
+              "There is no full function-settings page backup, exact bcdDevice 0x0115 hardware validation, or recovery procedure after a power cycle. The execution path is therefore locked in code.",
+              language: language
+            )
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
+
+          Button(action: inspectFactoryResetPlan) {
+            Label(
+              studioText(
+                "세 영역 위험 범위 계산",
+                "Calculate three-group risk scope",
+                language: language
+              ),
+              systemImage: "doc.text.magnifyingglass"
+            )
+          }
+          .buttonStyle(.bordered)
+          .disabled(!model.canInspectFactoryDefaultPlan)
+
+          if let factoryResetPreflightError {
+            Label(factoryResetPreflightError, systemImage: "xmark.octagon")
+              .font(.caption)
+              .foregroundStyle(StudioPalette.coral)
+          }
+
+          if let plan = inspectedFactoryResetPlan {
+            Label(factoryResetPlanSummary(plan), systemImage: "lock.shield")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
+        }
+
+        SettingsGroup(
           title: studioText("장치 검사", "Device inspection", language: language),
           symbol: "magnifyingglass"
         ) {
@@ -221,8 +295,8 @@ struct SettingsView: View {
               .foregroundStyle(StudioPalette.mint)
             Text(
               studioText(
-                "기본 새로고침과 직접 report 진단은 읽기 전용입니다. 키별 F5 조회, 시계 동기화, 선택한 내장 모드 하나, 완성된 84키 RGB 적용은 각각 별도 확인이 필요합니다. 유선 revision 0x0115의 FF13 Feature 채널만 사용하며, 세 적용 작업은 35ms 간격을 두고 모든 비동기 작업은 360ms로 제한합니다. ACK byte 3을 검증하고 재시도·output·LCD·키맵·매크로·펌웨어 작업은 하지 않습니다.",
-                "Normal refresh and direct report diagnostics are read only. The per-key F5 query, clock sync, one selected onboard mode, and a complete 84-key RGB apply each require separate confirmation. Only the wired revision 0x0115 FF13 Feature channel is used; the three apply paths use 35 ms pacing and every asynchronous operation has a 360 ms limit. ACK byte 3 is validated, with no retry, output, LCD, keymap, macro, or firmware operation.",
+                "기본 새로고침과 직접 report 진단은 읽기 전용입니다. 키별 F5 조회, 시계 동기화, 선택한 내장 모드, 완성된 84키 RGB와 고정 1프레임 LCD bootstrap은 각각 별도 확인이 필요합니다. fresh 영속 자격을 모두 마친 exact 대상에서는 현재 editor의 불변 1…40프레임 plan만 추가 exact 확인으로 적용할 수 있습니다. Feature 작업은 유선 revision 0x0115의 FF13을, LCD는 정확한 IF3/IF2 USB ancestry의 FF13+FF68을 사용하며 실패하면 이후 장치 작업을 격리합니다. 기본값 복원·raw LCD payload·키맵·매크로·펌웨어 실행 경로는 잠겨 있습니다.",
+                "Normal refresh and direct report diagnostics are read only. The per-key F5 query, clock sync, one selected onboard mode, a complete 84-key RGB table, and the fixed one-frame LCD bootstrap each require separate confirmation. On an exact target with complete fresh durable qualification, only an immutable 1...40-frame current-editor plan may be applied after another exact confirmation. Feature operations use FF13 on wired revision 0x0115; LCD uses FF13+FF68 with exact IF3/IF2 USB ancestry. Failure quarantines later device operations. Default restore, raw LCD payload, keymap, macro, and firmware execution paths are locked.",
                 language: language
               )
             )
@@ -264,6 +338,84 @@ struct SettingsView: View {
     .onChange(of: debounce) { _ in deviceDraftSaved = false }
     .onChange(of: reportRate) { _ in deviceDraftSaved = false }
     .onChange(of: functionLayerEnabled) { _ in deviceDraftSaved = false }
+  }
+
+  private func inspectFactoryResetPlan() {
+    factoryResetPreflightError = nil
+    do {
+      let plan = try model.preflightFactoryDefaults()
+      guard plan.hasCompleteDryRunShape,
+        plan.modeledCategories == [
+          .functionSettings, .perKeyRGB, .onboardLighting,
+        ]
+      else {
+        throw AK47FactoryResetError.invalidPlan
+      }
+      inspectedFactoryResetPlan = plan
+    } catch {
+      inspectedFactoryResetPlan = nil
+      factoryResetPreflightError = error.localizedDescription
+    }
+  }
+
+  private func factoryResetPlanSummary(_ plan: AK47FactoryResetPlan) -> String {
+    studioText(
+      "오프라인 계산: SET \(plan.featureSetCount)회, ACK \(plan.requiredAcknowledgementCount)회, 내부 flash \(plan.distinctInternalFlashPageCount)개 페이지에 erase/program \(plan.internalFlashEraseTransactionCount)회입니다. 기능 설정·84키 RGB·내장 조명만 포함하고 키맵·Fn 키맵·매크로·LCD는 제외합니다. 실행은 잠겨 있습니다.",
+      "Offline calculation: \(plan.featureSetCount) SETs, \(plan.requiredAcknowledgementCount) ACKs, and \(plan.internalFlashEraseTransactionCount) erase/program transactions across \(plan.distinctInternalFlashPageCount) internal-flash pages. It covers only function settings, 84-key RGB, and onboard lighting; Base/Fn keymaps, macros, and LCD are excluded. Execution is locked.",
+      language: language
+    )
+  }
+
+  private func factoryResetCategoryLabel(_ category: AK47FactoryResetCategory) -> String {
+    switch category {
+    case .functionSettings:
+      studioText("기능 설정", "Function settings", language: language)
+    case .perKeyRGB:
+      studioText("84키 RGB", "84-key RGB", language: language)
+    case .onboardLighting:
+      studioText("내장 조명", "Onboard lighting", language: language)
+    case .baseKeymap:
+      studioText("기본 키맵", "Base keymap", language: language)
+    case .functionKeymap:
+      studioText("Fn 키맵", "Fn keymap", language: language)
+    case .macros:
+      studioText("매크로", "Macros", language: language)
+    case .display:
+      "LCD"
+    }
+  }
+
+  private func factoryResetAvailabilityLabel(
+    _ availability: AK47FactoryResetCategoryAvailability
+  ) -> String {
+    switch availability {
+    case .modeledOffline:
+      studioText("오프라인 모델 있음", "Modeled offline", language: language)
+    case .blocked(.exactDefaultTableUnavailable):
+      studioText("기본 표 미확정", "Default table unverified", language: language)
+    case .blocked(.exactEncoderUnavailable):
+      studioText("인코더 미확정", "Encoder unverified", language: language)
+    case .blocked(.recoveryBoundaryUnavailable):
+      studioText("복구 경계 미확정", "Recovery boundary unverified", language: language)
+    }
+  }
+
+  private func factoryResetStatusSymbol(
+    _ availability: AK47FactoryResetCategoryAvailability
+  ) -> String {
+    switch availability {
+    case .modeledOffline: "checkmark.circle.fill"
+    case .blocked: "lock.fill"
+    }
+  }
+
+  private func factoryResetStatusTint(
+    _ availability: AK47FactoryResetCategoryAvailability
+  ) -> Color {
+    switch availability {
+    case .modeledOffline: StudioPalette.mint
+    case .blocked: .secondary
+    }
   }
 
   private func saveDeviceDraft() {

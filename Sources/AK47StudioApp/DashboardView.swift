@@ -116,8 +116,8 @@ struct DashboardView: View {
           .foregroundStyle(.secondary)
         Text(
           studioText(
-            "기본 검사는 읽기 전용입니다. 시계와 제한된 조명 적용은 정확한 유선 장치에서 작업별 확인 후에만 실행됩니다.",
-            "Normal inspection is read only. Clock and bounded lighting operations run only after per-operation confirmation on the exact wired device.",
+            "기본 검사는 읽기 전용입니다. 시계와 제한된 조명은 정확한 유선 장치에서 작업별 확인 후 적용됩니다. 기본값 계획과 LCD 파일 내보내기는 로컬 전용이며, LCD 장치 적용은 Display의 고정 bootstrap 또는 fresh 영속 자격을 마친 exact editor snapshot으로만 제한됩니다.",
+            "Normal inspection is read only. Clock and bounded lighting apply only after per-operation confirmation on the exact wired device. Default plans and LCD file export stay local; LCD device Apply is limited to Display's fixed bootstrap or an exact editor snapshot with complete fresh durable qualification.",
             language: language
           )
         )

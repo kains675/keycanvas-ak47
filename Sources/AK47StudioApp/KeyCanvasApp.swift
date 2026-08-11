@@ -2,6 +2,7 @@ import SwiftUI
 
 @main
 struct KeyCanvasApp: App {
+  @NSApplicationDelegateAdaptor(KeyCanvasApplicationDelegate.self) private var applicationDelegate
   @StateObject private var model = StudioModel()
 
   var body: some Scene {

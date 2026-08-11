@@ -35,8 +35,10 @@ public enum HIDEnumerator {
 
   private static func makeRecord(device: IOHIDDevice) -> HIDCollectionRecord {
     HIDCollectionRecord(
-      vendorID: numberProperty(kIOHIDVendorIDKey, device: device) ?? vendorID,
-      productID: numberProperty(kIOHIDProductIDKey, device: device) ?? productID,
+      // The manager match is not identity evidence. Missing registry identity
+      // must stay non-matching for qualification and recovery observations.
+      vendorID: numberProperty(kIOHIDVendorIDKey, device: device) ?? 0,
+      productID: numberProperty(kIOHIDProductIDKey, device: device) ?? 0,
       product: stringProperty(kIOHIDProductKey, device: device),
       manufacturer: stringProperty(kIOHIDManufacturerKey, device: device),
       serialNumber: stringProperty(kIOHIDSerialNumberKey, device: device),

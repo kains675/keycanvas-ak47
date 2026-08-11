@@ -31,6 +31,7 @@ struct DeviceInspectorView: View {
         }
 
         safetyBanner
+        DeviceQuarantineRecoveryCard(model: model)
 
         if case .scanning = model.inspectorState {
           HStack(spacing: 12) {
@@ -69,8 +70,8 @@ struct DeviceInspectorView: View {
     } message: {
       Text(
         studioText(
-          "현재 Mac의 로컬 날짜와 시각을 첫 번째 화면 슬롯에 한 번 전송합니다. ACK가 정의된 단계의 byte 3을 확인하며 자동 재시도하지 않습니다. 현재 장치 시각을 읽거나 이전 값으로 되돌리는 기능은 없습니다.",
-          "Sends the Mac's current local date and time once to the first display slot. ACK-required stages validate byte 3 and never retry automatically. The current device time cannot be read back or restored.",
+          "제조사 유틸리티·Windows VM·다른 HID 도구를 모두 종료한 뒤 진행하세요. 현재 Mac의 로컬 날짜와 시각을 첫 번째 화면 슬롯에 한 번 전송합니다. ACK가 정의된 단계의 byte 3을 확인하며 자동 재시도하지 않습니다. 현재 장치 시각을 읽거나 이전 값으로 되돌리는 기능은 없습니다.",
+          "Quit the vendor utility, every Windows VM, and other HID tools before continuing. This sends the Mac's current local date and time once to the first display slot. ACK-required stages validate byte 3 and never retry automatically. The current device time cannot be read back or restored.",
           language: language
         )
       )
@@ -164,8 +165,8 @@ struct DeviceInspectorView: View {
         .font(.headline)
         Text(
           studioText(
-            "읽기 전용 report 진단은 GetReport만 호출합니다. F5 RGB 조회와 시계·조명 적용은 서로 다른 확인이 필요하며 revision 0x0115의 FF13 Feature 채널만 사용합니다. 자동 재시도·output·LCD·키맵·매크로·펌웨어·부트로더 작업은 없습니다.",
-            "The read-only report probe calls GetReport only. The F5 RGB query and clock or lighting operations require distinct confirmations and use only the revision 0x0115 FF13 Feature channel. There is no automatic retry, output, LCD, keymap, macro, firmware, or bootloader operation.",
+            "읽기 전용 report 진단은 GetReport만 호출합니다. F5 RGB 조회와 시계·조명 적용은 서로 다른 확인이 필요합니다. Display의 고정 1프레임 LCD bootstrap은 4개 risk 확인과 별도 최종 승인 뒤 output을 사용하며, fresh 영속 자격을 모두 마친 exact 대상만 현재 editor의 불변 1…40프레임 plan을 별도 승인할 수 있습니다. 기본값 계획은 Settings dry-run이고 raw LCD payload·키맵·매크로·펌웨어·부트로더 live 작업은 없습니다.",
+            "The read-only report probe calls GetReport only. F5 RGB and clock or lighting apply require distinct confirmations. Display's fixed one-frame LCD bootstrap uses Output only after four risk acknowledgements and a separate final approval; only an exact target with fresh durable qualification may separately authorize an immutable 1...40-frame current-editor plan. Default-plan inspection is a Settings dry run, and there is no raw LCD payload, keymap, macro, firmware, or bootloader live operation.",
             language: language
           )
         )
@@ -266,8 +267,8 @@ struct DeviceInspectorView: View {
     } message: {
       Text(
         studioText(
-          "이 동작은 키별 색상 조회용 Feature 명령과 정상 종료 명령을 전송합니다. Windows 앱에서는 조회 경로이지만, 설정이 전혀 바뀌지 않는지는 실제 장치에서 아직 확인되지 않았습니다. 조명이나 화면이 변하면 즉시 사용을 중단하고 USB를 다시 연결하세요.",
-          "This sends a Feature command for per-key color readback and a normal finish command. The Windows app uses it as a read path, but unchanged device state has not yet been confirmed on hardware. If lighting or the screen changes, stop and reconnect USB.",
+          "제조사 유틸리티·Windows VM·다른 HID 도구를 모두 종료한 뒤 진행하세요. 이 동작은 키별 색상 조회용 Feature 명령과 정상 종료 명령을 전송합니다. Windows 앱에서는 조회 경로이지만 설정이 전혀 바뀌지 않는지는 실제 장치에서 아직 확인되지 않았습니다. 실패하면 selector를 USB 위치에 유지하고 케이블을 분리해 LCD·LED가 완전히 꺼지고 실제 열거가 0이 되는지 확인하는 안전 격리 절차를 수행해야 합니다. 2.4G/Bluetooth 전환은 복구가 아닙니다.",
+          "Quit the vendor utility, every Windows VM, and other HID tools before continuing. This sends a Feature command for per-key color readback and a normal finish command. The Windows app uses it as a read path, but unchanged device state has not yet been confirmed on hardware. A failure requires the safety-quarantine flow: keep the selector in USB mode, disconnect the cable, verify that the LCD and LEDs fully power down, and refresh until real enumeration reaches zero. Switching to 2.4G/Bluetooth is not recovery.",
           language: language
         )
       )
@@ -325,6 +326,16 @@ struct DeviceInspectorView: View {
             )
         }
       }
+
+      Text(
+        studioText(
+          "이 결과는 조회 시점에 밝기가 적용된 84키 RGB 출력 프레임입니다. 저장된 원본 색상표나 내장 효과 설정의 백업으로 사용할 수 없습니다.",
+          "This is the brightness-adjusted 84-key RGB output frame observed at query time. It is not a backup of the stored source colors or onboard-effect settings.",
+          language: language
+        )
+      )
+      .font(.caption)
+      .foregroundStyle(.secondary)
     }
   }
 
@@ -358,6 +369,17 @@ struct DeviceInspectorView: View {
           label: "bcdDevice",
           value: record.versionNumber.map { hex($0, width: 4) } ?? "—")
       }
+
+      Label(
+        studioText(
+          "bcdDevice는 USB 장치 descriptor의 release 번호입니다. 이 값만으로 설치된 펌웨어 버전이나 MCU 종류를 확정할 수 없습니다.",
+          "bcdDevice is the USB device descriptor release number. It does not by itself identify the installed firmware version or MCU.",
+          language: language
+        ),
+        systemImage: "info.circle"
+      )
+      .font(.caption)
+      .foregroundStyle(.secondary)
     }
     .studioPanel()
   }

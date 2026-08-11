@@ -10,52 +10,60 @@ struct AK47LightingKeyboardPreview: View {
   let brightnessLevel: Double
   let speedLevel: Double
   let direction: Int
+  let colorful: Bool
   let baseColor: AK47InspectorCore.RGBColor
-  let accentColor: AK47InspectorCore.RGBColor
   let revision: Int
 
-  @State private var epoch = Date()
-  @State private var manualPresses: [AK47LightingPreviewPress] = []
+  @StateObject private var session = AK47LightingPreviewSession()
 
   var body: some View {
-    TimelineView(
-      .animation(
-        minimumInterval: 1.0 / 30.0,
-        paused: !lightingEnabled || reduceMotion
+    keyboard(frame: session.frame)
+      .aspectRatio(
+        AK47PhysicalLayout.canvasSize.width / AK47PhysicalLayout.canvasSize.height,
+        contentMode: .fit
       )
-    ) { context in
-      keyboard(at: previewTime(for: context.date))
-    }
-    .aspectRatio(
-      AK47PhysicalLayout.canvasSize.width / AK47PhysicalLayout.canvasSize.height,
-      contentMode: .fit
-    )
-    .onChange(of: effect) { _ in restart() }
-    .onChange(of: revision) { _ in restart() }
-    .onChange(of: lightingEnabled) { enabled in
-      if enabled { restart() }
-    }
+      .onAppear {
+        synchronizeSession(restart: true)
+        session.setPaused(!lightingEnabled || reduceMotion)
+        session.start()
+      }
+      .onDisappear { session.stop() }
+      .onChange(of: previewConfiguration) { configuration in
+        session.configure(
+          configuration,
+          includesDeterministicDemoInput: effect.isReactive && !reduceMotion
+        )
+        session.setPaused(!lightingEnabled || reduceMotion)
+      }
+      .onChange(of: revision) { _ in synchronizeSession(restart: true) }
+      .onChange(of: reduceMotion) { _ in
+        synchronizeSession(restart: false)
+        session.setPaused(!lightingEnabled || reduceMotion)
+      }
   }
 
-  private func keyboard(at time: TimeInterval) -> some View {
-    let samples =
-      lightingEnabled
-      ? AK47LightingPreviewEngine.frame(
-        effect: effect,
-        time: time,
-        speedLevel: speedLevel,
-        brightnessLevel: brightnessLevel,
-        direction: direction,
-        baseColor: AK47LightingPreviewRGB(baseColor),
-        accentColor: AK47LightingPreviewRGB(accentColor),
-        manualPresses: manualPresses,
-        includesSimulatedInput: effect.isReactive && !reduceMotion
-      )
-      : Dictionary(
-        uniqueKeysWithValues: AK47PhysicalLayout.keys.map { ($0.id, AK47LightingPreviewSample.off) }
-      )
+  private var previewConfiguration: AK47LightingPreviewConfiguration {
+    AK47LightingPreviewConfiguration(
+      effect: effect,
+      isEnabled: lightingEnabled,
+      speedLevel: Int(speedLevel.rounded()),
+      brightnessLevel: Int(brightnessLevel.rounded()),
+      direction: direction,
+      colorful: colorful,
+      baseColor: AK47LightingPreviewRGB(baseColor)
+    )
+  }
 
-    return GeometryReader { proxy in
+  private func synchronizeSession(restart: Bool) {
+    session.configure(
+      previewConfiguration,
+      restart: restart,
+      includesDeterministicDemoInput: effect.isReactive && !reduceMotion
+    )
+  }
+
+  private func keyboard(frame: AK47LightingPreviewFrame) -> some View {
+    GeometryReader { proxy in
       let scale = min(
         proxy.size.width / AK47PhysicalLayout.canvasSize.width,
         proxy.size.height / AK47PhysicalLayout.canvasSize.height
@@ -64,17 +72,19 @@ struct AK47LightingKeyboardPreview: View {
       let yOffset = (proxy.size.height - AK47PhysicalLayout.canvasSize.height * scale) / 2
 
       ZStack(alignment: .topLeading) {
-        ForEach(AK47PhysicalLayout.keys) { key in
-          previewKey(
-            key,
-            sample: samples[key.id] ?? .off,
-            time: time,
-            scale: scale
-          )
-          .position(
-            x: xOffset + key.center.x * scale,
-            y: yOffset + key.center.y * scale
-          )
+        ForEach(Array(AK47PhysicalLayout.keys.enumerated()), id: \.element.id) { ordinal, key in
+          if let keyIndex = AK47LightingPreviewKeyIndex(rawValue: ordinal) {
+            previewKey(
+              key,
+              keyIndex: keyIndex,
+              pixel: frame[keyIndex],
+              scale: scale
+            )
+            .position(
+              x: xOffset + key.center.x * scale,
+              y: yOffset + key.center.y * scale
+            )
+          }
         }
 
         indicatorDots(scale: scale)
@@ -97,27 +107,24 @@ struct AK47LightingKeyboardPreview: View {
 
   private func previewKey(
     _ key: AK47PhysicalKey,
-    sample: AK47LightingPreviewSample,
-    time: TimeInterval,
+    keyIndex: AK47LightingPreviewKeyIndex,
+    pixel: AK47LightingPreviewPixel,
     scale: CGFloat
   ) -> some View {
     let color = Color(
-      red: sample.color.red,
-      green: sample.color.green,
-      blue: sample.color.blue
+      red: pixel.normalizedRed,
+      green: pixel.normalizedGreen,
+      blue: pixel.normalizedBlue
     )
     return Button {
       guard lightingEnabled, effect.isReactive else { return }
-      manualPresses.append(AK47LightingPreviewEngine.press(for: key, at: time))
-      if manualPresses.count > 16 {
-        manualPresses.removeFirst(manualPresses.count - 16)
-      }
+      session.enqueueTap(key: keyIndex)
     } label: {
       RoundedRectangle(cornerRadius: max(3, 6 * scale), style: .continuous)
         .fill(Color.white.opacity(0.055))
         .overlay {
           RoundedRectangle(cornerRadius: max(3, 6 * scale), style: .continuous)
-            .fill(color.opacity(sample.intensity * 0.9))
+            .fill(color.opacity(0.9))
         }
         .overlay {
           RoundedRectangle(cornerRadius: max(3, 6 * scale), style: .continuous)
@@ -138,7 +145,7 @@ struct AK47LightingKeyboardPreview: View {
             .padding(.horizontal, max(1, 3 * scale))
         }
         .shadow(
-          color: color.opacity(sample.intensity * 0.68),
+          color: color.opacity(pixel.normalizedIntensity * 0.68),
           radius: max(1, 7 * scale)
         )
     }
@@ -146,7 +153,7 @@ struct AK47LightingKeyboardPreview: View {
     .disabled(!lightingEnabled || !effect.isReactive)
     .frame(width: key.width * scale, height: key.height * scale)
     .accessibilityLabel(key.id)
-    .accessibilityHidden(!effect.isReactive)
+    .accessibilityHidden(!lightingEnabled || !effect.isReactive)
     .accessibilityHint(
       studioText(
         "조명 미리보기에서 이 키의 입력을 시뮬레이션합니다.",
@@ -211,14 +218,5 @@ struct AK47LightingKeyboardPreview: View {
           .padding(.top, max(2, 5 * scale))
       }
       .accessibilityLabel(studioText("회전 노브", "Rotary knob", language: language))
-  }
-
-  private func previewTime(for date: Date) -> TimeInterval {
-    reduceMotion ? 0 : max(0, date.timeIntervalSince(epoch))
-  }
-
-  private func restart() {
-    epoch = Date()
-    manualPresses = []
   }
 }

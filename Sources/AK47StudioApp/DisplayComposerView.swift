@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 
 struct DisplayComposerView: View {
   @Environment(\.studioLanguage) private var language
+  @ObservedObject var model: StudioModel
   @ObservedObject var profileStore: LocalProfileStore
   @State private var theme = "Orbit"
   @State private var accent = StudioPalette.mint
@@ -15,8 +16,21 @@ struct DisplayComposerView: View {
   @State private var savedLocally = false
   @State private var selectedAssetID: String?
   @State private var assetPreview: NSImage?
+  @State private var assetPreviewSource: DisplayAssetPreviewSource?
+  @State private var assetTimeline: DisplayAnimationTimeline?
+  @State private var assetEstimate: DisplayContainerEstimate?
+  @State private var currentFrameIndex = 0
+  @State private var previewIsPlaying = false
+  @State private var playbackRevision = 0
+  @State private var animationEditorInput: DisplayAnimationEditorInput?
+  @State private var qualifiedVisualReviewSnapshot: LCDQualifiedAnimationSnapshot?
   @State private var assetMessage: String?
   @State private var assetMessageIsError = false
+
+  init(model: StudioModel) {
+    self.model = model
+    profileStore = model.profileStore
+  }
 
   var body: some View {
     ScrollView {
@@ -25,8 +39,8 @@ struct DisplayComposerView: View {
           eyebrow: studioText("240 × 135 시안", "240 × 135 study", language: language),
           title: studioText("디스플레이", "Display", language: language),
           detail: studioText(
-            "내장 화면을 위한 구성을 미리 그려 봅니다. 이미지를 업로드하거나 장치에 쓰지 않습니다.",
-            "Sketch a composition for the built-in screen. No image is uploaded or written to the device.",
+            "이미지와 GIF는 로컬에서 편집합니다. 고정 1프레임 진단과 영속 복구 자격을 새 build에서 모두 마친 경우에만 현재 editor snapshot을 최대 40프레임까지 별도 확인 후 적용할 수 있습니다.",
+            "Edit images and GIFs locally. Only after a fresh fixed one-frame diagnostic and complete durable recovery qualification may the current editor snapshot be applied, with separate confirmation, up to 40 frames.",
             language: language
           )
         )
@@ -39,6 +53,44 @@ struct DisplayComposerView: View {
         }
 
         assetLibrary
+
+        LCDExperimentalTransferCard(
+          adapterLinked: true,
+          exactTargetReady: model.hasVerifiedLCDDiagnosticTarget,
+          deviceOperationAllowed: model.canRunLCDDiagnosticUpload,
+          qualificationAllowsFreshDiagnostic: model.qualificationAllowsFreshLCDDiagnostic,
+          uploadState: model.lcdDiagnosticUploadState,
+          onBeginOneFrameUpload: model.uploadLCDDiagnosticFixtureOnce
+        )
+
+        LCDExtendedQualificationCard(
+          state: model.lcdExtendedQualificationViewState,
+          canRefreshHardware: model.canRefreshInspector,
+          canRecordVisualAttestation: model.canRecordLCDCanonicalVisualAttestation,
+          canReportCanonicalVisualMismatch: model.canReportLCDCanonicalVisualMismatch,
+          canRecordWiredPowerRemovalAttestation: model
+            .canRecordLCDUSBModeCablePowerCycleAttestation,
+          canReviewExtendedVisualResult: model.canConfirmQualifiedLCDAnimationVisualResult,
+          canReportExtendedVisualMismatch: model.canReportQualifiedLCDAnimationVisualMismatch,
+          canReconcileInterruptedTransfer: model.canReconcileInterruptedLCDTransfer,
+          errorMessage: model.lcdExtendedQualificationError,
+          onRefreshHardware: model.refreshInspector,
+          onRecordVisualAttestation: model.recordLCDCanonicalVisualAttestation,
+          onReportCanonicalVisualMismatch: {
+            _ = model.reportLCDCanonicalVisualMismatch()
+          },
+          onRecordWiredPowerRemovalAttestation: model
+            .recordLCDUSBModeCablePowerCycleAttestation,
+          onReviewExtendedVisualResult: {
+            qualifiedVisualReviewSnapshot = model.lcdQualifiedAnimationVisualReviewSnapshot
+          },
+          onReportExtendedVisualMismatch: {
+            _ = model.reportQualifiedLCDAnimationVisualMismatch()
+          },
+          onReconcileInterruptedTransfer: {
+            _ = model.reconcileInterruptedLCDTransfer()
+          }
+        )
 
         HStack(spacing: 14) {
           DisplayPreset(
@@ -67,6 +119,34 @@ struct DisplayComposerView: View {
       }
       savedLocally = false
     }
+    .task(id: playbackTaskID) {
+      await playSelectedAsset()
+    }
+    .onDisappear {
+      previewIsPlaying = false
+    }
+    .sheet(item: $animationEditorInput) { input in
+      DisplayAnimationEditorView(input: input, studioModel: model)
+        .environment(\.studioLanguage, language)
+    }
+    .sheet(item: $qualifiedVisualReviewSnapshot) { snapshot in
+      LCDQualifiedUploadVisualReviewSheet(
+        snapshot: snapshot,
+        canConfirmCorrect: model.canConfirmQualifiedLCDAnimationVisualResult,
+        canReportMismatch: model.canReportQualifiedLCDAnimationVisualMismatch,
+        onConfirmCorrect: {
+          if model.recordQualifiedLCDAnimationVisualResult() {
+            qualifiedVisualReviewSnapshot = nil
+          }
+        },
+        onReportMismatch: {
+          if model.reportQualifiedLCDAnimationVisualMismatch() {
+            qualifiedVisualReviewSnapshot = nil
+          }
+        }
+      )
+      .environment(\.studioLanguage, language)
+    }
   }
 
   private var displayPreview: some View {
@@ -92,6 +172,10 @@ struct DisplayComposerView: View {
         }
         .shadow(color: StudioPalette.ink.opacity(0.20), radius: 18, y: 8)
 
+      if let timeline = assetTimeline {
+        animationControls(timeline: timeline)
+      }
+
       HStack {
         Text("240 × 135 px")
         Spacer()
@@ -106,6 +190,17 @@ struct DisplayComposerView: View {
       }
       .font(.caption.monospaced())
       .foregroundStyle(.secondary)
+
+      if let selectedAsset, let assetEstimate {
+        DisplayAssetValidationSummary(
+          asset: selectedAsset,
+          estimate: assetEstimate,
+          currentFrameDelayMilliseconds: assetTimeline?.delayMilliseconds(
+            forFrameAt: currentFrameIndex),
+          totalDurationMilliseconds: assetTimeline?.totalDurationMilliseconds,
+          language: language
+        )
+      }
     }
     .studioPanel()
   }
@@ -127,8 +222,8 @@ struct DisplayComposerView: View {
           Spacer()
           HStack {
             Label(
-              studioText("로컬 복사본 · 첫 프레임", "Local copy · first frame", language: language),
-              systemImage: "photo"
+              previewOverlayLabel,
+              systemImage: assetTimeline?.frameCount ?? 0 > 1 ? "play.rectangle" : "photo"
             )
             .font(.caption2.weight(.semibold))
             .foregroundStyle(.white.opacity(0.86))
@@ -188,9 +283,109 @@ struct DisplayComposerView: View {
     profileStore.selectedProfile.tft.assets
   }
 
+  private var playlistAssets: [DisplayAssetReference] {
+    let byIdentifier = Dictionary(uniqueKeysWithValues: assets.map { ($0.identifier, $0) })
+    return profileStore.selectedProfile.tft.playlist.compactMap { byIdentifier[$0] }
+  }
+
   private var selectedAsset: DisplayAssetReference? {
     guard let selectedAssetID else { return nil }
     return assets.first(where: { $0.identifier == selectedAssetID })
+  }
+
+  private var playbackTaskID: String {
+    "\(selectedAssetID ?? "none"):\(previewIsPlaying):\(playbackRevision)"
+  }
+
+  private var previewOverlayLabel: String {
+    guard let timeline = assetTimeline, timeline.frameCount > 1 else {
+      return studioText("로컬 복사본 · 정지 이미지", "Local copy · still image", language: language)
+    }
+    return studioText(
+      "로컬 복사본 · \(currentFrameIndex + 1)/\(timeline.frameCount) 프레임",
+      "Local copy · frame \(currentFrameIndex + 1)/\(timeline.frameCount)",
+      language: language
+    )
+  }
+
+  private func animationControls(timeline: DisplayAnimationTimeline) -> some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(spacing: 10) {
+        Button {
+          showFrame(max(0, currentFrameIndex - 1), restartPlayback: true)
+        } label: {
+          Image(systemName: "backward.frame.fill")
+        }
+        .buttonStyle(.borderless)
+        .disabled(timeline.frameCount <= 1 || currentFrameIndex == 0)
+
+        Button {
+          previewIsPlaying.toggle()
+          playbackRevision += 1
+        } label: {
+          Image(systemName: previewIsPlaying ? "pause.fill" : "play.fill")
+            .frame(width: 18)
+        }
+        .buttonStyle(.bordered)
+        .disabled(timeline.frameCount <= 1)
+        .help(
+          previewIsPlaying
+            ? studioText("미리보기 일시 정지", "Pause preview", language: language)
+            : studioText("미리보기 재생", "Play preview", language: language)
+        )
+
+        Button {
+          showFrame(min(timeline.frameCount - 1, currentFrameIndex + 1), restartPlayback: true)
+        } label: {
+          Image(systemName: "forward.frame.fill")
+        }
+        .buttonStyle(.borderless)
+        .disabled(timeline.frameCount <= 1 || currentFrameIndex >= timeline.frameCount - 1)
+
+        Slider(
+          value: Binding(
+            get: { Double(currentFrameIndex) },
+            set: { showFrame(Int($0.rounded()), restartPlayback: true) }
+          ),
+          in: 0...Double(max(1, timeline.frameCount - 1)),
+          step: 1
+        )
+        .disabled(timeline.frameCount <= 1)
+
+        Text("\(currentFrameIndex + 1) / \(timeline.frameCount)")
+          .font(.caption.monospacedDigit())
+          .foregroundStyle(.secondary)
+          .frame(minWidth: 58, alignment: .trailing)
+      }
+
+      HStack {
+        Text(
+          studioText(
+            "소스 지연 \(timeline.delayMilliseconds(forFrameAt: currentFrameIndex) ?? 0) ms",
+            "Source delay \(timeline.delayMilliseconds(forFrameAt: currentFrameIndex) ?? 0) ms",
+            language: language
+          )
+        )
+        Spacer()
+        Text(
+          studioText(
+            "미리보기 최소 \(DisplayPreviewRuntimeLimits.minimumPlaybackDelayMilliseconds) ms",
+            "Preview minimum \(DisplayPreviewRuntimeLimits.minimumPlaybackDelayMilliseconds) ms",
+            language: language
+          )
+        )
+        Spacer()
+        Text(
+          studioText(
+            "1회 \(formattedDuration(timeline.totalDurationMilliseconds))",
+            "Loop \(formattedDuration(timeline.totalDurationMilliseconds))",
+            language: language
+          )
+        )
+      }
+      .font(.caption.monospacedDigit())
+      .foregroundStyle(.secondary)
+    }
   }
 
   private var assetLibrary: some View {
@@ -252,6 +447,79 @@ struct DisplayComposerView: View {
         }
       }
 
+      if !playlistAssets.isEmpty {
+        Divider()
+        VStack(alignment: .leading, spacing: 10) {
+          HStack {
+            Text(studioText("재생 목록", "Playlist", language: language))
+              .font(.subheadline.weight(.semibold))
+            Spacer()
+            Text(
+              studioText(
+                "\(playlistAssets.count)개 로컬 항목",
+                "\(playlistAssets.count) local items",
+                language: language
+              )
+            )
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.secondary)
+          }
+
+          ForEach(Array(playlistAssets.enumerated()), id: \.offset) { index, asset in
+            HStack(spacing: 10) {
+              Text("\(index + 1)")
+                .font(.caption.monospacedDigit().weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 24)
+              Button {
+                selectedAssetID = asset.identifier
+              } label: {
+                HStack {
+                  Image(systemName: asset.frameCount > 1 ? "photo.stack" : "photo")
+                  Text(URL(fileURLWithPath: asset.resourceName).lastPathComponent)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+              }
+              .buttonStyle(.plain)
+
+              Button {
+                movePlaylistItem(from: index, by: -1)
+              } label: {
+                Image(systemName: "chevron.up")
+              }
+              .buttonStyle(.borderless)
+              .disabled(index == 0)
+              .help(studioText("위로 이동", "Move up", language: language))
+
+              Button {
+                movePlaylistItem(from: index, by: 1)
+              } label: {
+                Image(systemName: "chevron.down")
+              }
+              .buttonStyle(.borderless)
+              .disabled(index == playlistAssets.count - 1)
+              .help(studioText("아래로 이동", "Move down", language: language))
+
+              Button(role: .destructive) {
+                removePlaylistItem(at: index)
+              } label: {
+                Image(systemName: "trash")
+              }
+              .buttonStyle(.borderless)
+              .help(
+                studioText(
+                  "재생 목록에서만 제거", "Remove from playlist only", language: language)
+              )
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 9))
+          }
+        }
+      }
+
       if let selectedAsset {
         Divider()
         HStack(alignment: .center, spacing: 16) {
@@ -269,6 +537,27 @@ struct DisplayComposerView: View {
             .foregroundStyle(compatibilityTint(for: selectedAsset))
           }
           Spacer()
+          if playlistPosition(for: selectedAsset.identifier) == nil {
+            Button(action: addSelectedAssetToPlaylist) {
+              Label(
+                studioText("재생 목록에 추가", "Add to playlist", language: language),
+                systemImage: "text.badge.plus"
+              )
+            }
+            .buttonStyle(.bordered)
+          }
+          if selectedAsset.resourceName.lowercased().hasSuffix(".gif") {
+            Button {
+              openAnimationEditor(for: selectedAsset)
+            } label: {
+              Label(
+                studioText("GIF 편집…", "Edit GIF…", language: language),
+                systemImage: "slider.horizontal.3"
+              )
+            }
+            .buttonStyle(.bordered)
+            .disabled(profileStore.displayAssetURL(for: selectedAsset) == nil)
+          }
           Button(action: exportSelectedAsset) {
             Label(
               studioText("복사본 내보내기…", "Export copy…", language: language),
@@ -290,8 +579,8 @@ struct DisplayComposerView: View {
 
       Label(
         studioText(
-          "장치 연결이나 HID report 전송은 수행하지 않습니다.",
-          "No device connection or HID report transfer is performed.",
+          "이 화면의 미리보기·편집·저장은 로컬 전용이며 HID report를 보내지 않습니다.",
+          "Preview, editing, and saving on this screen are local only and send no HID report.",
           language: language
         ),
         systemImage: "lock.shield"
@@ -314,11 +603,11 @@ struct DisplayComposerView: View {
       Divider()
       Label(
         studioText(
-          "이미지는 로컬 복사본으로만 사용되며 키보드 전송은 비활성 상태입니다.",
-          "Images are used only as local copies; keyboard transfer remains disabled.",
+          "이미지와 GIF/RGB565 내보내기는 로컬 전용이며 자동 전송되지 않습니다. 자격이 검증된 뒤에도 editor의 현재 불변 snapshot만 별도 exact-plan 확인으로 적용합니다.",
+          "Image and GIF/RGB565 exports remain local and are never uploaded automatically. Even after qualification, only the editor's current immutable snapshot can be applied through a separate exact-plan confirmation.",
           language: language
         ),
-        systemImage: "lock"
+        systemImage: "lock.shield"
       )
       .font(.caption)
       .foregroundStyle(.secondary)
@@ -380,7 +669,10 @@ struct DisplayComposerView: View {
     }
 
     do {
-      let inspection = try DisplayAssetInspection.inspect(sourceURL)
+      let inspection = try DisplayAssetInspection.inspect(
+        sourceURL,
+        fallbackDelayMilliseconds: fallbackFrameDelayMilliseconds
+      )
       profileStore.updateTFT(currentTFTDraft)
       let reference = try profileStore.copyDisplayAsset(
         from: sourceURL,
@@ -390,7 +682,6 @@ struct DisplayComposerView: View {
         frameCount: inspection.frameCount
       )
       selectedAssetID = reference.identifier
-      assetPreview = inspection.preview
       profileStore.saveSelected()
 
       if case .saved = profileStore.status {
@@ -458,6 +749,50 @@ struct DisplayComposerView: View {
     profileStore.selectedProfile.tft.playlist.firstIndex(of: identifier).map { $0 + 1 }
   }
 
+  private func openAnimationEditor(for asset: DisplayAssetReference) {
+    guard let sourceURL = profileStore.displayAssetURL(for: asset) else { return }
+    animationEditorInput = DisplayAnimationEditorInput(
+      sourceURL: sourceURL,
+      displayName: URL(fileURLWithPath: asset.resourceName).lastPathComponent,
+      fallbackDelayMilliseconds: fallbackFrameDelayMilliseconds
+    )
+  }
+
+  private func movePlaylistItem(from sourceIndex: Int, by offset: Int) {
+    let playlist = profileStore.selectedProfile.tft.playlist
+    applyPlaylist(DisplayPlaylistEditing.moving(playlist, from: sourceIndex, by: offset))
+  }
+
+  private func removePlaylistItem(at index: Int) {
+    let playlist = profileStore.selectedProfile.tft.playlist
+    applyPlaylist(DisplayPlaylistEditing.removing(playlist, at: index))
+    assetMessageIsError = false
+    assetMessage = studioText(
+      "로컬 복사본은 유지하고 재생 목록에서만 제거했습니다.",
+      "Removed it from the playlist while keeping the local copy.",
+      language: language
+    )
+  }
+
+  private func addSelectedAssetToPlaylist() {
+    guard let selectedAsset else { return }
+    let playlist = profileStore.selectedProfile.tft.playlist
+    applyPlaylist(DisplayPlaylistEditing.appending(selectedAsset.identifier, to: playlist))
+    assetMessageIsError = false
+    assetMessage = studioText(
+      "재생 목록 끝에 추가했습니다.",
+      "Added it to the end of the playlist.",
+      language: language
+    )
+  }
+
+  private func applyPlaylist(_ playlist: [String]) {
+    var draft = currentTFTDraft
+    draft.playlist = playlist
+    profileStore.updateTFT(draft)
+    savedLocally = false
+  }
+
   private func compatibilityLabel(for asset: DisplayAssetReference) -> String {
     if asset.frameCount > 1 {
       return studioText(
@@ -516,8 +851,8 @@ struct DisplayComposerView: View {
       tft.playlist.first(where: { identifier in
         tft.assets.contains(where: { $0.identifier == identifier })
       }) ?? tft.assets.first?.identifier
-    loadAssetPreview()
     assetMessage = nil
+    loadAssetPreview()
     savedLocally = false
   }
 
@@ -525,10 +860,99 @@ struct DisplayComposerView: View {
     guard let selectedAsset,
       let url = profileStore.displayAssetURL(for: selectedAsset)
     else {
-      assetPreview = nil
+      clearAssetPreview()
       return
     }
-    assetPreview = DisplayAssetInspection.makePreview(url)
+
+    do {
+      let source = try DisplayAssetPreviewSource(
+        url: url,
+        fallbackDelayMilliseconds: fallbackFrameDelayMilliseconds
+      )
+      let timeline = DisplayAnimationTimeline(
+        frameCount: source.frameCount,
+        sourceDelaysMilliseconds: source.frameDelaysMilliseconds,
+        fallbackDelayMilliseconds: fallbackFrameDelayMilliseconds
+      )
+      assetPreviewSource = source
+      assetTimeline = timeline
+      assetEstimate = DisplayContainerEstimate(
+        targetWidth: 240,
+        targetHeight: 135,
+        referenceFrameCount: selectedAsset.frameCount,
+        decodedWidth: source.pixelWidth,
+        decodedHeight: source.pixelHeight,
+        decodedFrameCount: source.frameCount,
+        decodedDelayCount: timeline.frameDelaysMilliseconds.count,
+        encodedContainerByteCount: Int64(source.containerByteCount),
+        maximumContainerByteCount: Int64(LocalDisplayAssetLimits.maximumByteCount),
+        planningPageByteCount: 4_096
+      )
+      currentFrameIndex = 0
+      assetPreview = source.image(at: 0)
+      previewIsPlaying = false
+      playbackRevision += 1
+    } catch {
+      clearAssetPreview()
+      assetMessageIsError = true
+      assetMessage = studioText(
+        "로컬 복사본의 프레임을 읽지 못했습니다.",
+        "The frames in the local copy could not be read.",
+        language: language
+      )
+    }
+  }
+
+  private var fallbackFrameDelayMilliseconds: Int {
+    let frameRate = max(1, profileStore.selectedProfile.tft.frameRate)
+    return max(1, Int((1_000.0 / Double(frameRate)).rounded()))
+  }
+
+  private func clearAssetPreview() {
+    assetPreview = nil
+    assetPreviewSource = nil
+    assetTimeline = nil
+    assetEstimate = nil
+    currentFrameIndex = 0
+    previewIsPlaying = false
+    playbackRevision += 1
+  }
+
+  private func showFrame(_ index: Int, restartPlayback: Bool) {
+    guard let source = assetPreviewSource, source.frameCount > 0 else { return }
+    let safeIndex = min(max(0, index), source.frameCount - 1)
+    currentFrameIndex = safeIndex
+    assetPreview = source.image(at: safeIndex) ?? assetPreview
+    if restartPlayback {
+      playbackRevision += 1
+    }
+  }
+
+  @MainActor
+  private func playSelectedAsset() async {
+    guard previewIsPlaying, let timeline = assetTimeline, timeline.frameCount > 1 else { return }
+
+    while !Task.isCancelled, previewIsPlaying {
+      let delay =
+        timeline.previewDelayMilliseconds(
+          forFrameAt: currentFrameIndex,
+          minimumMilliseconds: DisplayPreviewRuntimeLimits.minimumPlaybackDelayMilliseconds
+        ) ?? DisplayPreviewRuntimeLimits.minimumPlaybackDelayMilliseconds
+      do {
+        try await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000)
+      } catch {
+        return
+      }
+      guard !Task.isCancelled, previewIsPlaying else { return }
+      showFrame((currentFrameIndex + 1) % timeline.frameCount, restartPlayback: false)
+    }
+  }
+
+  private func formattedDuration(_ milliseconds: Int) -> String {
+    if milliseconds < 1_000 {
+      return "\(milliseconds) ms"
+    }
+    return String(format: "%.2f s", Double(milliseconds) / 1_000)
   }
 }
 
@@ -584,20 +1008,194 @@ private struct DisplayAssetCard: View {
   }
 }
 
+private struct DisplayAssetValidationSummary: View {
+  let asset: DisplayAssetReference
+  let estimate: DisplayContainerEstimate
+  let currentFrameDelayMilliseconds: Int?
+  let totalDurationMilliseconds: Int?
+  let language: AppLanguage
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 9) {
+      HStack {
+        Text(studioText("선택 항목 검증", "Selected asset check", language: language))
+          .font(.subheadline.weight(.semibold))
+        Spacer()
+        StatusPill(
+          label: estimate.isInternallyConsistent
+            ? studioText("파일 일치", "File consistent", language: language)
+            : studioText("확인 필요", "Needs review", language: language),
+          symbol: estimate.isInternallyConsistent ? "checkmark.circle" : "exclamationmark.triangle",
+          tint: estimate.isInternallyConsistent ? StudioPalette.mint : StudioPalette.coral
+        )
+      }
+
+      validationRow(
+        title: studioText("캔버스", "Canvas", language: language),
+        value: "\(estimate.decodedWidth)×\(estimate.decodedHeight) / 240×135",
+        state: estimate.matchesTargetCanvas ? .pass : .notice
+      )
+      validationRow(
+        title: studioText("프레임 수", "Frame count", language: language),
+        value: studioText(
+          "프로필 \(asset.frameCount) · 파일 \(estimate.decodedFrameCount)",
+          "Profile \(asset.frameCount) · file \(estimate.decodedFrameCount)",
+          language: language
+        ),
+        state: estimate.referenceMatchesDecodedFrameCount ? .pass : .fail
+      )
+      validationRow(
+        title: studioText("프레임 지연", "Frame delays", language: language),
+        value: delaySummary,
+        state: estimate.hasOneDelayPerDecodedFrame ? .pass : .fail
+      )
+      validationRow(
+        title: studioText("인코딩된 파일", "Encoded container", language: language),
+        value: containerSummary,
+        state: estimate.isContainerWithinLimit ? .pass : .fail
+      )
+      validationRow(
+        title: studioText("4 KiB 계획 조각", "4 KiB planning chunks", language: language),
+        value: studioText(
+          "\(estimate.planningPageCount)개 · 마지막 \(estimate.finalPlanningPageByteCount) B",
+          "\(estimate.planningPageCount) chunks · final \(estimate.finalPlanningPageByteCount) B",
+          language: language
+        ),
+        state: .neutral
+      )
+
+      Text(
+        studioText(
+          "컨테이너와 4 KiB 값은 로컬 인코딩 계획치입니다. 실제 내보내기에서 형식을 다시 검증하지만, 이 값은 물리 SPI partition 끝이나 안전한 live upload 크기를 증명하지 않습니다.",
+          "Container and 4 KiB values are local encoding estimates and are revalidated during export. They do not prove a physical SPI partition end or a safe live-upload size.",
+          language: language
+        )
+      )
+      .font(.caption2)
+      .foregroundStyle(.secondary)
+    }
+    .padding(12)
+    .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
+  }
+
+  private var delaySummary: String {
+    let count = estimate.decodedDelayCount
+    guard let currentFrameDelayMilliseconds, let totalDurationMilliseconds else {
+      return studioText("\(count)개", "\(count) entries", language: language)
+    }
+    return studioText(
+      "\(count)개 · 현재 \(currentFrameDelayMilliseconds) ms · 1회 \(duration(totalDurationMilliseconds))",
+      "\(count) entries · current \(currentFrameDelayMilliseconds) ms · loop \(duration(totalDurationMilliseconds))",
+      language: language
+    )
+  }
+
+  private var containerSummary: String {
+    let byteCount = formattedBytes(estimate.encodedContainerByteCount)
+    let limit = formattedBytes(estimate.maximumContainerByteCount)
+    return "\(byteCount) / \(limit)"
+  }
+
+  private func validationRow(
+    title: String,
+    value: String,
+    state: DisplayValidationState
+  ) -> some View {
+    HStack(alignment: .firstTextBaseline, spacing: 8) {
+      Image(systemName: state.symbol)
+        .foregroundStyle(state.tint)
+        .frame(width: 14)
+      Text(title)
+        .foregroundStyle(.secondary)
+      Spacer()
+      Text(value)
+        .multilineTextAlignment(.trailing)
+        .foregroundStyle(state == .fail ? StudioPalette.coral : .primary)
+    }
+    .font(.caption.monospacedDigit())
+  }
+
+  private func formattedBytes(_ byteCount: Int64) -> String {
+    ByteCountFormatter.string(fromByteCount: byteCount, countStyle: .file)
+  }
+
+  private func duration(_ milliseconds: Int) -> String {
+    guard milliseconds >= 1_000 else { return "\(milliseconds) ms" }
+    return String(format: "%.2f s", Double(milliseconds) / 1_000)
+  }
+}
+
+private enum DisplayValidationState {
+  case pass
+  case notice
+  case fail
+  case neutral
+
+  var symbol: String {
+    switch self {
+    case .pass: "checkmark.circle.fill"
+    case .notice: "rectangle.compress.vertical"
+    case .fail: "exclamationmark.triangle.fill"
+    case .neutral: "info.circle"
+    }
+  }
+
+  var tint: Color {
+    switch self {
+    case .pass: StudioPalette.mint
+    case .notice: StudioPalette.violet
+    case .fail: StudioPalette.coral
+    case .neutral: StudioPalette.blue
+    }
+  }
+}
+
 private struct DisplayAssetInspection {
   let pixelWidth: Int
   let pixelHeight: Int
   let frameCount: Int
   let preferredFilenameExtension: String
-  let preview: NSImage
 
-  static func inspect(_ url: URL) throws -> DisplayAssetInspection {
+  static func inspect(
+    _ url: URL,
+    fallbackDelayMilliseconds: Int
+  ) throws -> DisplayAssetInspection {
+    let source = try DisplayAssetPreviewSource(
+      url: url,
+      fallbackDelayMilliseconds: fallbackDelayMilliseconds
+    )
+    return DisplayAssetInspection(
+      pixelWidth: source.pixelWidth,
+      pixelHeight: source.pixelHeight,
+      frameCount: source.frameCount,
+      preferredFilenameExtension: source.preferredFilenameExtension
+    )
+  }
+}
+
+private final class DisplayAssetPreviewSource {
+  let pixelWidth: Int
+  let pixelHeight: Int
+  let frameCount: Int
+  let frameDelaysMilliseconds: [Int]
+  let containerByteCount: Int
+  let preferredFilenameExtension: String
+
+  private let source: CGImageSource
+  private let imageCache = NSCache<NSNumber, NSImage>()
+
+  init(url: URL, fallbackDelayMilliseconds: Int) throws {
     let values = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
     guard values.isRegularFile == true,
       let byteCount = values.fileSize,
       byteCount > 0,
-      byteCount <= LocalDisplayAssetLimits.maximumByteCount,
-      let source = makeSource(url),
+      byteCount <= LocalDisplayAssetLimits.maximumByteCount
+    else {
+      throw DisplayAssetInspectionError.invalidImage
+    }
+
+    let options = [kCGImageSourceShouldCache: false] as CFDictionary
+    guard let source = CGImageSourceCreateWithURL(url as CFURL, options),
       let sourceType = CGImageSourceGetType(source),
       let contentType = UTType(sourceType as String),
       contentType.conforms(to: .png)
@@ -606,63 +1204,93 @@ private struct DisplayAssetInspection {
       let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)
         as? [CFString: Any],
       let width = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
-      let height = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue,
-      (1...8_192).contains(width),
-      (1...8_192).contains(height)
+      let height = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue
     else {
       throw DisplayAssetInspectionError.invalidImage
     }
 
     let frameCount = CGImageSourceGetCount(source)
-    guard (1...10_000).contains(frameCount),
-      let preview = makePreview(source)
+    guard
+      DisplayPreviewWorkLimits.localImport.permits(
+        width: width,
+        height: height,
+        frameCount: frameCount
+      )
     else {
       throw DisplayAssetInspectionError.invalidImage
     }
 
-    let filenameExtension: String
-    if contentType.conforms(to: .gif) {
-      filenameExtension = "gif"
-    } else if contentType.conforms(to: .png) {
-      filenameExtension = "png"
-    } else {
-      filenameExtension = "jpg"
+    let safeFallback = min(60_000, max(1, fallbackDelayMilliseconds))
+    let delays = (0..<frameCount).map { index in
+      Self.frameDelayMilliseconds(source: source, index: index) ?? safeFallback
     }
 
-    return DisplayAssetInspection(
-      pixelWidth: width,
-      pixelHeight: height,
-      frameCount: frameCount,
-      preferredFilenameExtension: filenameExtension,
-      preview: preview
-    )
+    self.source = source
+    self.pixelWidth = width
+    self.pixelHeight = height
+    self.frameCount = frameCount
+    self.frameDelaysMilliseconds = delays
+    self.containerByteCount = byteCount
+    if contentType.conforms(to: .gif) {
+      preferredFilenameExtension = "gif"
+    } else if contentType.conforms(to: .png) {
+      preferredFilenameExtension = "png"
+    } else {
+      preferredFilenameExtension = "jpg"
+    }
+    imageCache.countLimit = DisplayPreviewRuntimeLimits.maximumCachedFrameCount
+    imageCache.totalCostLimit = DisplayPreviewRuntimeLimits.maximumCacheByteCost
+
+    guard image(at: 0) != nil else {
+      throw DisplayAssetInspectionError.invalidImage
+    }
   }
 
-  static func makePreview(_ url: URL) -> NSImage? {
-    guard let source = makeSource(url) else { return nil }
-    return makePreview(source)
-  }
+  func image(at index: Int) -> NSImage? {
+    guard (0..<frameCount).contains(index) else { return nil }
+    let key = NSNumber(value: index)
+    if let cached = imageCache.object(forKey: key) {
+      return cached
+    }
 
-  private static func makeSource(_ url: URL) -> CGImageSource? {
-    let options = [kCGImageSourceShouldCache: false] as CFDictionary
-    return CGImageSourceCreateWithURL(url as CFURL, options)
-  }
-
-  private static func makePreview(_ source: CGImageSource) -> NSImage? {
     let options: [CFString: Any] = [
       kCGImageSourceCreateThumbnailFromImageAlways: true,
       kCGImageSourceCreateThumbnailWithTransform: true,
-      kCGImageSourceThumbnailMaxPixelSize: 480,
+      kCGImageSourceThumbnailMaxPixelSize: DisplayPreviewRuntimeLimits.thumbnailMaximumPixelSize,
       kCGImageSourceShouldCacheImmediately: true,
     ]
-    guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+    guard let image = CGImageSourceCreateThumbnailAtIndex(source, index, options as CFDictionary)
     else {
       return nil
     }
-    return NSImage(
+    let preview = NSImage(
       cgImage: image,
       size: NSSize(width: image.width, height: image.height)
     )
+    let (decodedByteCost, costOverflow) = image.bytesPerRow.multipliedReportingOverflow(
+      by: image.height)
+    imageCache.setObject(
+      preview,
+      forKey: key,
+      cost: costOverflow ? DisplayPreviewRuntimeLimits.maximumCacheByteCost : decodedByteCost
+    )
+    return preview
+  }
+
+  private static func frameDelayMilliseconds(source: CGImageSource, index: Int) -> Int? {
+    guard
+      let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil)
+        as? [CFString: Any],
+      let gif = properties[kCGImagePropertyGIFDictionary] as? [CFString: Any]
+    else {
+      return nil
+    }
+    let seconds =
+      (gif[kCGImagePropertyGIFUnclampedDelayTime] as? NSNumber)?.doubleValue
+      ?? (gif[kCGImagePropertyGIFDelayTime] as? NSNumber)?.doubleValue
+    guard let seconds, seconds.isFinite, seconds > 0 else { return nil }
+    let milliseconds = Int((seconds * 1_000).rounded())
+    return (1...60_000).contains(milliseconds) ? milliseconds : nil
   }
 }
 

@@ -103,7 +103,7 @@ struct StudioRootView: View {
     case .macros:
       MacrosView(profileStore: model.profileStore)
     case .display:
-      DisplayComposerView(profileStore: model.profileStore)
+      DisplayComposerView(model: model)
     case .settings:
       SettingsView(model: model)
     case .deviceInspector:

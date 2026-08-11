@@ -5,15 +5,18 @@ public struct AK47PerKeyRGBQueryRequest: Equatable, Sendable {
   public let product: String
   public let locationID: UInt64
   public let versionNumber: UInt64
+  public let serialNumber: String?
 
   public init(
     product: String = "Archon AK47",
     locationID: UInt64,
-    versionNumber: UInt64
+    versionNumber: UInt64,
+    serialNumber: String? = nil
   ) {
     self.product = product
     self.locationID = locationID
     self.versionNumber = versionNumber
+    self.serialNumber = serialNumber
   }
 
   public func validate() throws {
@@ -28,6 +31,37 @@ public struct AK47PerKeyRGBQueryRequest: Equatable, Sendable {
         "only the verified USB revision 0x0115 is enabled"
       )
     }
+    if let serialNumber {
+      guard !serialNumber.isEmpty, serialNumber.utf8.count <= 256 else {
+        throw AK47PerKeyRGBQueryAdapterError.invalidRequest(
+          "serial number is empty or too long"
+        )
+      }
+    }
+  }
+}
+
+/// One-use confirmation bound to one exact F5 target. Only another target in
+/// this package (the confirmed Studio UI or opt-in hardware tests) can create it.
+public final class AK47PerKeyRGBQueryAuthorization: @unchecked Sendable {
+  private let request: AK47PerKeyRGBQueryRequest
+  private let lock = NSLock()
+  private var consumed = false
+
+  package init(explicitlyConfirming request: AK47PerKeyRGBQueryRequest) {
+    self.request = request
+  }
+
+  package func consume(for expected: AK47PerKeyRGBQueryRequest) throws {
+    lock.lock()
+    defer { lock.unlock() }
+    guard request == expected else {
+      throw AK47PerKeyRGBQueryAdapterError.authorizationMismatch
+    }
+    guard !consumed else {
+      throw AK47PerKeyRGBQueryAdapterError.authorizationAlreadyConsumed
+    }
+    consumed = true
   }
 }
 
@@ -56,11 +90,15 @@ public enum AK47PerKeyRGBQueryStage: Equatable, Sendable {
 
 public enum AK47PerKeyRGBQueryAdapterError: Error, Equatable, LocalizedError, Sendable {
   case invalidRequest(String)
+  case authorizationMismatch
+  case authorizationAlreadyConsumed
   case noMatchingCollection
   case ambiguousCollections(Int)
   case unexpectedTopology(collections: Int)
   case deviceBusy
   case operationGatePoisoned
+  case partialTransactionQuarantined(String)
+  case quarantinePersistenceFailed
   case openFailed(UInt32)
   case sessionCancellationTimedOut
   case operationFailed(stage: AK47PerKeyRGBQueryStage, code: UInt32)
@@ -72,6 +110,10 @@ public enum AK47PerKeyRGBQueryAdapterError: Error, Equatable, LocalizedError, Se
     switch self {
     case .invalidRequest(let reason):
       "invalid AK47 RGB query request: \(reason)"
+    case .authorizationMismatch:
+      "the one-use RGB query confirmation does not match this exact target"
+    case .authorizationAlreadyConsumed:
+      "the one-use RGB query confirmation was already consumed"
     case .noMatchingCollection:
       "the exact AK47 RGB command collection was not found"
     case .ambiguousCollections(let count):
@@ -81,11 +123,15 @@ public enum AK47PerKeyRGBQueryAdapterError: Error, Equatable, LocalizedError, Se
     case .deviceBusy:
       "another HID diagnostic operation is already in progress"
     case .operationGatePoisoned:
-      "AK47 HID operations are locked until this process restarts because a previous cancellation was not confirmed"
+      "AK47 HID operations are quarantined. Keep the selector in USB mode, disconnect the cable until the device is unpowered, refresh Device Inspector while it is absent, then reconnect at the original USB location and refresh again. Relaunching or switching to 2.4G/Bluetooth does not clear the quarantine."
+    case .partialTransactionQuarantined(let cause):
+      "AK47 RGB query state is uncertain after report submission (\(cause)). Keep the selector in USB mode, disconnect the cable until the device is unpowered, refresh Device Inspector while it is absent, then reconnect at the original USB location and refresh again. Relaunching alone does not clear the quarantine, and switching to 2.4G/Bluetooth is not recovery."
+    case .quarantinePersistenceFailed:
+      "KeyCanvas could not durably record the AK47 transaction marker, so no RGB query report was submitted. HID operations remain blocked in this process."
     case .openFailed(let code):
       String(format: "opening the AK47 command collection failed (0x%08X)", code)
     case .sessionCancellationTimedOut:
-      "AK47 RGB query cancellation was not confirmed within 500 ms; HID operations are locked until restart"
+      "AK47 RGB query cancellation was not confirmed within 500 ms. Keep the selector in USB mode, disconnect the cable until the device is unpowered, refresh Device Inspector while it is absent, then reconnect at the original USB location and refresh again."
     case .operationFailed(let stage, let code):
       String(
         format: "AK47 RGB %@ failed (0x%08X)",
@@ -176,22 +222,31 @@ enum AK47PerKeyRGBTransaction {
 }
 
 public enum AK47PerKeyRGBQueryAdapter {
-  public static func query(_ request: AK47PerKeyRGBQueryRequest) throws
+  public static func query(
+    _ request: AK47PerKeyRGBQueryRequest,
+    authorization: AK47PerKeyRGBQueryAuthorization
+  ) throws
     -> AK47PerKeyRGBSnapshot
   {
     try request.validate()
-    guard HIDDeviceOperationGate.acquire() else {
-      if HIDDeviceOperationGate.isPoisoned {
-        throw AK47PerKeyRGBQueryAdapterError.operationGatePoisoned
-      }
+    try authorization.consume(for: request)
+    let quarantineTarget = HIDDeviceQuarantineIdentity(request: request)
+    switch HIDDeviceOperationGate.acquireResult(for: quarantineTarget) {
+    case .acquired:
+      break
+    case .busy:
       throw AK47PerKeyRGBQueryAdapterError.deviceBusy
+    case .quarantined:
+      throw AK47PerKeyRGBQueryAdapterError.operationGatePoisoned
     }
-    var mustPoisonGate = false
+    let transactionEvidence = HIDDeviceOperationGate.makeTransactionEvidence()
+    var gateFinalized = false
     defer {
-      if mustPoisonGate {
-        HIDDeviceOperationGate.poison()
-      } else {
-        HIDDeviceOperationGate.release()
+      if !gateFinalized {
+        try? HIDDeviceOperationGate.finish(
+          succeeded: false,
+          evidence: transactionEvidence
+        )
       }
     }
 
@@ -236,31 +291,85 @@ public enum AK47PerKeyRGBQueryAdapter {
     guard openResult == kIOReturnSuccess else {
       throw AK47PerKeyRGBQueryAdapterError.openFailed(rawCode(openResult))
     }
-    let session = SystemAK47FeatureReportSession(device: device)
+    let session = SystemAK47FeatureReportSession(
+      device: device,
+      transactionEvidence: transactionEvidence
+    )
     let snapshot: AK47PerKeyRGBSnapshot
     do {
-      snapshot = try AK47PerKeyRGBTransaction.execute(
-        session: session,
-        sleep: { milliseconds in
-          Thread.sleep(forTimeInterval: Double(milliseconds) / 1_000)
+      do {
+        snapshot = try AK47PerKeyRGBTransaction.execute(
+          session: session,
+          sleep: { milliseconds in
+            Thread.sleep(forTimeInterval: Double(milliseconds) / 1_000)
+          }
+        )
+      } catch let transactionError {
+        do {
+          try session.cancel()
+          if !transactionEvidence.hasSubmittedReport {
+            Thread.sleep(forTimeInterval: 0.05)
+            if (try? verifyPostflight(request: request)) != nil {
+              transactionEvidence.recordSafePreSubmissionCleanup()
+            }
+          }
+        } catch {
+          transactionEvidence.recordUnconfirmedCancellation()
         }
-      )
-    } catch {
+        throw transactionError
+      }
       do {
         try session.cancel()
       } catch {
-        mustPoisonGate = true
+        transactionEvidence.recordUnconfirmedCancellation()
         throw error
       }
-      throw error
+      Thread.sleep(forTimeInterval: 0.05)
+      try verifyPostflight(request: request)
+    } catch {
+      let operationError = errorForFailedTransaction(error, evidence: transactionEvidence)
+      do {
+        try HIDDeviceOperationGate.finish(
+          succeeded: false,
+          evidence: transactionEvidence
+        )
+        gateFinalized = true
+      } catch {
+        gateFinalized = true
+        throw AK47PerKeyRGBQueryAdapterError.partialTransactionQuarantined(
+          "durable quarantine finalization failed after: \(operationError.localizedDescription)"
+        )
+      }
+      throw operationError
     }
     do {
-      try session.cancel()
+      try HIDDeviceOperationGate.finish(
+        succeeded: true,
+        evidence: transactionEvidence
+      )
+      gateFinalized = true
     } catch {
-      mustPoisonGate = true
-      throw error
+      gateFinalized = true
+      throw AK47PerKeyRGBQueryAdapterError.partialTransactionQuarantined(
+        "the RGB query completed, but durable marker cleanup failed"
+      )
     }
     return snapshot
+  }
+
+  static func errorForFailedTransaction(
+    _ error: Error,
+    evidence: HIDDeviceTransactionEvidence
+  ) -> Error {
+    guard evidence.failureRequiresPhysicalRecovery else { return error }
+    if let queryError = error as? AK47PerKeyRGBQueryAdapterError,
+      case .partialTransactionQuarantined = queryError
+    {
+      return error
+    }
+    return AK47PerKeyRGBQueryAdapterError.partialTransactionQuarantined(
+      error.localizedDescription
+    )
   }
 
   private static func matchesIdentity(
@@ -273,6 +382,8 @@ public enum AK47PerKeyRGBQueryAdapter {
       && stringProperty(kIOHIDTransportKey, device: device) == "USB"
       && numberProperty(kIOHIDLocationIDKey, device: device) == request.locationID
       && numberProperty(kIOHIDVersionNumberKey, device: device) == request.versionNumber
+      && (request.serialNumber == nil
+        || stringProperty(kIOHIDSerialNumberKey, device: device) == request.serialNumber)
   }
 
   private static func matchesCommandCollection(_ device: IOHIDDevice) -> Bool {
@@ -340,6 +451,59 @@ public enum AK47PerKeyRGBQueryAdapter {
   private static func rawCode(_ result: IOReturn) -> UInt32 {
     UInt32(bitPattern: result)
   }
+
+  private static func verifyPostflight(
+    request: AK47PerKeyRGBQueryRequest
+  ) throws {
+    let records = try HIDEnumerator.enumerate().filter { record in
+      record.vendorID == HIDEnumerator.vendorID
+        && record.productID == HIDEnumerator.productID
+        && record.product == request.product
+        && record.transport == "USB"
+        && record.locationID == request.locationID
+        && record.versionNumber == request.versionNumber
+        && (request.serialNumber == nil || record.serialNumber == request.serialNumber)
+    }
+    let signatures = Set(
+      records.compactMap { record -> AK47RGBQueryCollectionSignature? in
+        guard let usagePage = record.usagePage,
+          let usage = record.usage,
+          let input = record.maxInputReportSize,
+          let output = record.maxOutputReportSize,
+          let feature = record.maxFeatureReportSize
+        else { return nil }
+        return AK47RGBQueryCollectionSignature(
+          usagePage: usagePage,
+          usage: usage,
+          input: input,
+          output: output,
+          feature: feature
+        )
+      })
+    let expected: Set<AK47RGBQueryCollectionSignature> = [
+      AK47RGBQueryCollectionSignature(
+        usagePage: 0x0001, usage: 0x0006, input: 8, output: 1, feature: 0),
+      AK47RGBQueryCollectionSignature(
+        usagePage: 0x000C, usage: 0x0001, input: 16, output: 1, feature: 1),
+      AK47RGBQueryCollectionSignature(
+        usagePage: 0xFF13, usage: 0x0001, input: 64, output: 64, feature: 64),
+      AK47RGBQueryCollectionSignature(
+        usagePage: 0xFF68, usage: 0x0061, input: 64, output: 4_096, feature: 0),
+    ]
+    guard records.count == 4, signatures == expected else {
+      throw AK47PerKeyRGBQueryAdapterError.unexpectedTopology(
+        collections: records.count
+      )
+    }
+  }
+}
+
+private struct AK47RGBQueryCollectionSignature: Hashable {
+  let usagePage: UInt64
+  let usage: UInt64
+  let input: UInt64
+  let output: UInt64
+  let feature: UInt64
 }
 
 private final class AsyncFeatureReportOperation: @unchecked Sendable {
@@ -396,6 +560,7 @@ private final class SystemAK47FeatureReportSession: AK47FeatureReportSession {
   private static let callbackWaitMilliseconds = 500
 
   private let device: IOHIDDevice
+  private let transactionEvidence: HIDDeviceTransactionEvidence
   private let cancellationComplete = DispatchSemaphore(value: 0)
   private enum CancellationState {
     case active
@@ -405,8 +570,12 @@ private final class SystemAK47FeatureReportSession: AK47FeatureReportSession {
 
   private var cancellationState = CancellationState.active
 
-  init(device: IOHIDDevice) {
+  init(
+    device: IOHIDDevice,
+    transactionEvidence: HIDDeviceTransactionEvidence
+  ) {
     self.device = device
+    self.transactionEvidence = transactionEvidence
     let callbackQueue = DispatchQueue(label: "io.keycanvas.ak47.rgb-query")
     let cancellationComplete = cancellationComplete
     IOHIDDeviceSetDispatchQueue(device, callbackQueue)
@@ -446,6 +615,11 @@ private final class SystemAK47FeatureReportSession: AK47FeatureReportSession {
         actual: bytes.count
       )
     }
+    do {
+      try transactionEvidence.prepareForSubmission()
+    } catch {
+      throw AK47PerKeyRGBQueryAdapterError.quarantinePersistenceFailed
+    }
     let operation = AsyncFeatureReportOperation(bytes: bytes)
     let context = Unmanaged.passRetained(operation).toOpaque()
     let submissionResult = IOHIDDeviceSetReportWithCallback(
@@ -470,6 +644,11 @@ private final class SystemAK47FeatureReportSession: AK47FeatureReportSession {
     expectedLength: Int,
     stage: AK47PerKeyRGBQueryStage
   ) throws -> [UInt8] {
+    do {
+      try transactionEvidence.prepareForSubmission()
+    } catch {
+      throw AK47PerKeyRGBQueryAdapterError.quarantinePersistenceFailed
+    }
     let operation = AsyncFeatureReportOperation(
       bytes: [UInt8](repeating: 0, count: expectedLength)
     )
@@ -513,6 +692,7 @@ private final class SystemAK47FeatureReportSession: AK47FeatureReportSession {
         code: UInt32(bitPattern: submissionResult)
       )
     }
+    transactionEvidence.recordSubmittedReport()
     guard
       operation.completion.wait(
         timeout: .now() + .milliseconds(Self.callbackWaitMilliseconds)

@@ -48,18 +48,23 @@ public enum AK47DeviceWriteAdapter {
     steps: [AK47FeatureWriteStep]
   ) throws {
     try target.validate()
-    guard HIDDeviceOperationGate.acquire() else {
-      if HIDDeviceOperationGate.isPoisoned {
-        throw AK47DeviceWriteError.operationGatePoisoned
-      }
+    let quarantineTarget = HIDDeviceQuarantineIdentity(target: target)
+    switch HIDDeviceOperationGate.acquireResult(for: quarantineTarget) {
+    case .acquired:
+      break
+    case .busy:
       throw AK47DeviceWriteError.deviceBusy
+    case .quarantined:
+      throw AK47DeviceWriteError.operationGatePoisoned
     }
-    var mustPoisonGate = false
+    let transactionEvidence = HIDDeviceOperationGate.makeTransactionEvidence()
+    var gateFinalized = false
     defer {
-      if mustPoisonGate {
-        HIDDeviceOperationGate.poison()
-      } else {
-        HIDDeviceOperationGate.release()
+      if !gateFinalized {
+        try? HIDDeviceOperationGate.finish(
+          succeeded: false,
+          evidence: transactionEvidence
+        )
       }
     }
 
@@ -102,32 +107,84 @@ public enum AK47DeviceWriteAdapter {
     guard openResult == kIOReturnSuccess else {
       throw AK47DeviceWriteError.openFailed(rawCode(openResult))
     }
-    let session = SystemAK47WriteFeatureSession(device: device)
+    let session = SystemAK47WriteFeatureSession(
+      device: device,
+      transactionEvidence: transactionEvidence
+    )
     do {
-      try AK47FeatureWriteStateMachine.execute(
-        steps: steps,
-        session: session,
-        sleep: { milliseconds in
-          Thread.sleep(forTimeInterval: Double(milliseconds) / 1_000)
+      do {
+        try AK47FeatureWriteStateMachine.execute(
+          steps: steps,
+          session: session,
+          sleep: { milliseconds in
+            Thread.sleep(forTimeInterval: Double(milliseconds) / 1_000)
+          }
+        )
+      } catch let transactionError {
+        do {
+          try session.cancel()
+          if !transactionEvidence.hasSubmittedReport {
+            Thread.sleep(forTimeInterval: 0.05)
+            if (try? verifyPostflight(target: target)) != nil {
+              transactionEvidence.recordSafePreSubmissionCleanup()
+            }
+          }
+        } catch {
+          transactionEvidence.recordUnconfirmedCancellation()
         }
-      )
-    } catch {
+        throw transactionError
+      }
       do {
         try session.cancel()
       } catch {
-        mustPoisonGate = true
+        transactionEvidence.recordUnconfirmedCancellation()
         throw error
       }
-      throw error
+      Thread.sleep(forTimeInterval: 0.05)
+      try verifyPostflight(target: target)
+    } catch {
+      let operationError = errorForFailedTransaction(error, evidence: transactionEvidence)
+      do {
+        try HIDDeviceOperationGate.finish(
+          succeeded: false,
+          evidence: transactionEvidence
+        )
+        gateFinalized = true
+      } catch {
+        gateFinalized = true
+        throw AK47DeviceWriteError.partialTransactionQuarantined(
+          "durable quarantine finalization failed after: \(operationError.localizedDescription)"
+        )
+      }
+      throw operationError
     }
     do {
-      try session.cancel()
+      try HIDDeviceOperationGate.finish(
+        succeeded: true,
+        evidence: transactionEvidence
+      )
+      gateFinalized = true
     } catch {
-      mustPoisonGate = true
-      throw error
+      gateFinalized = true
+      throw AK47DeviceWriteError.partialTransactionQuarantined(
+        "the device transaction completed, but durable marker cleanup failed"
+      )
     }
-    Thread.sleep(forTimeInterval: 0.05)
-    try verifyPostflight(target: target)
+  }
+
+  static func errorForFailedTransaction(
+    _ error: Error,
+    evidence: HIDDeviceTransactionEvidence
+  ) -> Error {
+    guard evidence.failureRequiresPhysicalRecovery else { return error }
+    if let writeError = error as? AK47DeviceWriteError,
+      case .partialTransactionQuarantined = writeError
+    {
+      return error
+    }
+    return AK47DeviceWriteError.partialTransactionQuarantined(
+      error.localizedDescription
+    )
   }
 
   private static func matchesIdentity(
@@ -140,6 +197,8 @@ public enum AK47DeviceWriteAdapter {
       && stringProperty(kIOHIDTransportKey, device: device) == "USB"
       && numberProperty(kIOHIDLocationIDKey, device: device) == target.locationID
       && numberProperty(kIOHIDVersionNumberKey, device: device) == target.versionNumber
+      && (target.serialNumber == nil
+        || stringProperty(kIOHIDSerialNumberKey, device: device) == target.serialNumber)
   }
 
   private static func matchesCommandCollection(_ device: IOHIDDevice) -> Bool {
@@ -216,6 +275,7 @@ public enum AK47DeviceWriteAdapter {
         && record.transport == "USB"
         && record.locationID == target.locationID
         && record.versionNumber == target.versionNumber
+        && (target.serialNumber == nil || record.serialNumber == target.serialNumber)
     }
     let signatures = Set(
       records.compactMap { record -> CollectionSignature? in
@@ -309,6 +369,7 @@ private final class SystemAK47WriteFeatureSession: AK47WriteFeatureSession {
   private static let callbackWaitMilliseconds = 500
 
   private let device: IOHIDDevice
+  private let transactionEvidence: HIDDeviceTransactionEvidence
   private let cancellationComplete = DispatchSemaphore(value: 0)
   private enum CancellationState {
     case active
@@ -318,8 +379,12 @@ private final class SystemAK47WriteFeatureSession: AK47WriteFeatureSession {
 
   private var cancellationState = CancellationState.active
 
-  init(device: IOHIDDevice) {
+  init(
+    device: IOHIDDevice,
+    transactionEvidence: HIDDeviceTransactionEvidence
+  ) {
     self.device = device
+    self.transactionEvidence = transactionEvidence
     let callbackQueue = DispatchQueue(label: "io.keycanvas.ak47.verified-writes")
     let cancellationComplete = cancellationComplete
     IOHIDDeviceSetDispatchQueue(device, callbackQueue)
@@ -359,6 +424,11 @@ private final class SystemAK47WriteFeatureSession: AK47WriteFeatureSession {
         actual: bytes.count
       )
     }
+    do {
+      try transactionEvidence.prepareForSubmission()
+    } catch {
+      throw AK47DeviceWriteError.quarantinePersistenceFailed
+    }
     let operation = AK47WriteAsyncFeatureOperation(bytes: bytes)
     let context = Unmanaged.passRetained(operation).toOpaque()
     let submissionResult = IOHIDDeviceSetReportWithCallback(
@@ -383,6 +453,11 @@ private final class SystemAK47WriteFeatureSession: AK47WriteFeatureSession {
     expectedLength: Int,
     stage: AK47DeviceWriteStage
   ) throws -> [UInt8] {
+    do {
+      try transactionEvidence.prepareForSubmission()
+    } catch {
+      throw AK47DeviceWriteError.quarantinePersistenceFailed
+    }
     let operation = AK47WriteAsyncFeatureOperation(
       bytes: [UInt8](repeating: 0, count: expectedLength)
     )
@@ -426,6 +501,7 @@ private final class SystemAK47WriteFeatureSession: AK47WriteFeatureSession {
         code: UInt32(bitPattern: submissionResult)
       )
     }
+    transactionEvidence.recordSubmittedReport()
     guard
       operation.completion.wait(
         timeout: .now() + .milliseconds(Self.callbackWaitMilliseconds)

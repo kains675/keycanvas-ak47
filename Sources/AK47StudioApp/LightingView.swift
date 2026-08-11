@@ -373,8 +373,8 @@ struct LightingView: View {
     } message: {
       Text(
         studioText(
-          "현재 키보드의 모드·밝기·속도·방향은 읽어 백업할 수 없습니다. 선택한 값을 한 번 전송하며 실패 시 자동 재시도하지 않습니다.",
-          "The current mode, brightness, speed, and direction cannot be read back for backup. The selected values are sent once with no automatic retry.",
+          "제조사 유틸리티·Windows VM·다른 HID 도구를 모두 종료하세요. 현재 키보드의 모드·밝기·속도·방향은 읽어 백업할 수 없습니다. 선택한 값을 한 번 전송하며 실패 시 자동 재시도하지 않습니다.",
+          "Quit the vendor utility, every Windows VM, and other HID tools. The current mode, brightness, speed, and direction cannot be read back for backup. The selected values are sent once with no automatic retry.",
           language: language
         )
       )
@@ -649,8 +649,8 @@ struct LightingView: View {
     let litKeyCount = values.count { $0.color != AK47PerKeyLightingApplyValues.offColor }
     let offKeyCount = values.count - litKeyCount
     return studioText(
-      "84키 RGB 전체 표와 공통 밝기 \(Int(brightness.rounded()))/5를 덮어씁니다. 켜짐 \(litKeyCount)/84키, 나머지 \(offKeyCount)키는 검은색(RGB 0·0·0, 꺼짐)으로 전송합니다. 실패 시 자동 재시도하지 않습니다.",
-      "This overwrites the complete 84-key RGB table at shared brightness \(Int(brightness.rounded()))/5. \(litKeyCount)/84 keys are lit; the other \(offKeyCount) are sent as black (RGB 0·0·0, off). The operation never retries automatically.",
+      "제조사 유틸리티·Windows VM·다른 HID 도구를 모두 종료하세요. 84키 RGB 전체 표와 공통 밝기 \(Int(brightness.rounded()))/5를 덮어씁니다. 켜짐 \(litKeyCount)/84키, 나머지 \(offKeyCount)키는 검은색(RGB 0·0·0, 꺼짐)으로 전송합니다. 실패 시 자동 재시도하지 않습니다.",
+      "Quit the vendor utility, every Windows VM, and other HID tools. This overwrites the complete 84-key RGB table at shared brightness \(Int(brightness.rounded()))/5. \(litKeyCount)/84 keys are lit; the other \(offKeyCount) are sent as black (RGB 0·0·0, off). The operation never retries automatically.",
       language: language
     )
   }
@@ -663,8 +663,8 @@ struct LightingView: View {
             .font(.headline)
           Text(
             studioText(
-              "펌웨어 이름과 조절 축을 바탕으로 한 KeyCanvas 근사 애니메이션 · 실제 펌웨어의 프레임 수식은 미확인",
-              "A KeyCanvas approximation based on firmware names and controls · exact firmware frame math is unverified",
+              "근거가 확인된 이동 구조와 입력 반응을 독립적으로 다시 구현한 미리보기 · 속도, 밝기, 색상과 실제 광학 효과는 KeyCanvas가 만든 표현",
+              "An independent preview of evidence-grounded movement and input behavior · pacing, brightness, color, and physical optics are KeyCanvas-authored presentation choices",
               language: language
             )
           )
@@ -701,8 +701,8 @@ struct LightingView: View {
         brightnessLevel: brightness,
         speedLevel: tempo,
         direction: supportsDirection ? direction : 0,
+        colorful: colorful && effect.configurationCapabilities.contains(.paletteToggle),
         baseColor: firstColor.profileRGBColor,
-        accentColor: previewAccentColor,
         revision: previewRevision
       )
       .padding(18)
@@ -711,8 +711,8 @@ struct LightingView: View {
       if effect.isReactive {
         Label(
           studioText(
-            "자동 가상 키 입력으로 반복 재생합니다. 미리보기의 키를 클릭하면 그 위치에서도 반응합니다.",
-            "A simulated key press repeats automatically. Click a preview key to trigger the effect there too.",
+            "합성 데모 키 입력을 항상 같은 순서로 재생합니다. 키를 클릭하면 down/up 순서의 가상 입력도 추가됩니다.",
+            "Synthetic demo key taps repeat in a fixed order. Click a key to add an ordered down/up preview event.",
             language: language
           ),
           systemImage: "hand.tap"
@@ -911,16 +911,16 @@ struct LightingView: View {
       }
     }
 
-    if colorful {
-      DisclosureGroup(studioText("근사 미리보기 색상", "Approximate preview color", language: language)) {
-        ColorPicker(
-          studioText("미리보기 강조색 · 전송 안 됨", "Preview accent · not sent", language: language),
-          selection: $secondColor,
-          supportsOpacity: false
+    if colorful, effect.configurationCapabilities.contains(.paletteToggle) {
+      Text(
+        studioText(
+          "Colorful 미리보기는 하드웨어 시간 시드가 아닌 KeyCanvas의 고정 합성 팔레트를 사용합니다.",
+          "The Colorful preview uses a fixed synthetic KeyCanvas palette, not the unknown hardware-time seed.",
+          language: language
         )
-        .padding(.top, 6)
-      }
-      .font(.caption.weight(.semibold))
+      )
+      .font(.caption)
+      .foregroundStyle(.secondary)
     }
   }
 
@@ -1046,13 +1046,6 @@ struct LightingView: View {
   private var supportsDirection: Bool {
     let capabilities = effect.configurationCapabilities
     return capabilities.contains(.horizontalDirection) || capabilities.contains(.verticalDirection)
-  }
-
-  private var previewAccentColor: AK47InspectorCore.RGBColor {
-    guard effect.configurationCapabilities.contains(.paletteToggle), colorful else {
-      return firstColor.profileRGBColor
-    }
-    return secondColor.profileRGBColor
   }
 
   private func level(for percent: Int) -> Double {

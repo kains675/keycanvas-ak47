@@ -99,6 +99,34 @@ final class AK47PerKeyRGBQueryAdapterTests: XCTestCase {
     )
   }
 
+  func testAuthorizationIsBoundToOneExactRequestAndConsumedOnce() throws {
+    let request = AK47PerKeyRGBQueryRequest(
+      locationID: 0x0014_0000,
+      versionNumber: 0x0115
+    )
+    let otherRequest = AK47PerKeyRGBQueryRequest(
+      locationID: 0x0020_0000,
+      versionNumber: 0x0115
+    )
+    let authorization = AK47PerKeyRGBQueryAuthorization(
+      explicitlyConfirming: request
+    )
+
+    XCTAssertThrowsError(try authorization.consume(for: otherRequest)) {
+      XCTAssertEqual(
+        $0 as? AK47PerKeyRGBQueryAdapterError,
+        .authorizationMismatch
+      )
+    }
+    XCTAssertNoThrow(try authorization.consume(for: request))
+    XCTAssertThrowsError(try authorization.consume(for: request)) {
+      XCTAssertEqual(
+        $0 as? AK47PerKeyRGBQueryAdapterError,
+        .authorizationAlreadyConsumed
+      )
+    }
+  }
+
   func testAuthorizedHardwareOneShotQuery() throws {
     let authorization = ProcessInfo.processInfo.environment["KEYCANVAS_AK47_RGB_QUERY"]
     guard authorization == "RUN_ONE_SHOT_ON_0C45_800A_0115" else {
@@ -117,10 +145,14 @@ final class AK47PerKeyRGBQueryAdapterTests: XCTestCase {
     }
     let command = try XCTUnwrap(commandRecords.only)
     let locationID = try XCTUnwrap(command.locationID)
+    let request = AK47PerKeyRGBQueryRequest(
+      locationID: locationID,
+      versionNumber: 0x0115
+    )
     let snapshot = try AK47PerKeyRGBQueryAdapter.query(
-      AK47PerKeyRGBQueryRequest(
-        locationID: locationID,
-        versionNumber: 0x0115
+      request,
+      authorization: AK47PerKeyRGBQueryAuthorization(
+        explicitlyConfirming: request
       )
     )
 

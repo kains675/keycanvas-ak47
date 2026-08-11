@@ -4,15 +4,18 @@ public struct AK47WiredDeviceTarget: Equatable, Sendable {
   public let product: String
   public let locationID: UInt64
   public let versionNumber: UInt64
+  public let serialNumber: String?
 
   public init(
     product: String = "Archon AK47",
     locationID: UInt64,
-    versionNumber: UInt64
+    versionNumber: UInt64,
+    serialNumber: String? = nil
   ) {
     self.product = product
     self.locationID = locationID
     self.versionNumber = versionNumber
+    self.serialNumber = serialNumber
   }
 
   public func validate() throws {
@@ -26,6 +29,11 @@ public struct AK47WiredDeviceTarget: Equatable, Sendable {
       throw AK47DeviceWriteError.invalidTarget(
         "only the verified USB revision 0x0115 is enabled"
       )
+    }
+    if let serialNumber {
+      guard !serialNumber.isEmpty, serialNumber.utf8.count <= 256 else {
+        throw AK47DeviceWriteError.invalidTarget("serial number is empty or too long")
+      }
     }
   }
 }
@@ -223,6 +231,8 @@ public enum AK47DeviceWriteError: Error, Equatable, LocalizedError, Sendable {
   case unexpectedTopology(collections: Int)
   case deviceBusy
   case operationGatePoisoned
+  case partialTransactionQuarantined(String)
+  case quarantinePersistenceFailed
   case openFailed(UInt32)
   case sessionCancellationTimedOut
   case postflightIdentityLost
@@ -248,11 +258,15 @@ public enum AK47DeviceWriteError: Error, Equatable, LocalizedError, Sendable {
       "refusing the write because the wired AK47 exposes \(collections) unexpected HID collections"
     case .deviceBusy: "another AK47 HID operation is already in progress"
     case .operationGatePoisoned:
-      "AK47 writes are locked until this process restarts because a previous HID cancellation was not confirmed"
+      "AK47 HID operations are quarantined. Keep the selector in USB mode, disconnect the cable until the device is unpowered, refresh Device Inspector while it is absent, then reconnect at the original USB location and refresh again. Relaunching or switching to 2.4G/Bluetooth does not clear the quarantine."
+    case .partialTransactionQuarantined(let cause):
+      "AK47 transaction state is uncertain after report submission (\(cause)). Keep the selector in USB mode, disconnect the cable until the device is unpowered, refresh Device Inspector while it is absent, then reconnect at the original USB location and refresh again. Relaunching alone does not clear the quarantine, and switching to 2.4G/Bluetooth is not recovery."
+    case .quarantinePersistenceFailed:
+      "KeyCanvas could not durably record the AK47 transaction marker, so no report was submitted. HID operations remain blocked in this process."
     case .openFailed(let code):
       String(format: "opening the AK47 command collection failed (0x%08X)", code)
     case .sessionCancellationTimedOut:
-      "AK47 HID cancellation was not confirmed within 500 ms; writes are locked until restart"
+      "AK47 HID cancellation was not confirmed within 500 ms. Keep the selector in USB mode, disconnect the cable until the device is unpowered, refresh Device Inspector while it is absent, then reconnect at the original USB location and refresh again."
     case .postflightIdentityLost:
       "the exact AK47 identity or four-collection topology was not present after the write"
     case .operationFailed(let stage, let code):

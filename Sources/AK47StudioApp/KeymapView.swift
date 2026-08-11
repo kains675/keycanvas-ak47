@@ -1,15 +1,37 @@
 import AK47InspectorCore
+import Foundation
 import SwiftUI
 
 struct KeymapView: View {
   @Environment(\.studioLanguage) private var language
   @ObservedObject var profileStore: LocalProfileStore
   @State private var selectedKey = "Space"
-  @State private var assignment = "Space"
+  @State private var assignment = KeymapAssignmentChoice.keyCode(0x2C)
   @State private var activeLayer = "Base"
   @State private var savedLocally = false
 
   private let layers = ["Base", "Fn"]
+
+  private var assignmentOptions: [KeymapAssignmentChoice] {
+    var options: [KeymapAssignmentChoice] = [.disabled]
+    options.append(contentsOf: Self.consumerActionOrder.map { .consumerControl($0.usage) })
+    options.append(
+      contentsOf: AK47PhysicalLayout.keyIDs.compactMap { key in
+        Self.hidKeyCodes[key].map(KeymapAssignmentChoice.keyCode)
+      }
+    )
+    options.append(
+      contentsOf: profileStore.selectedProfile.macros.map {
+        .macro(identifier: $0.identifier)
+      }
+    )
+    if !options.contains(assignment) {
+      options.append(assignment)
+    }
+
+    var seen: Set<KeymapAssignmentChoice> = []
+    return options.filter { seen.insert($0).inserted }
+  }
 
   var body: some View {
     VStack(spacing: 0) {
@@ -64,8 +86,8 @@ struct KeymapView: View {
       Divider()
 
       Picker(studioText("할당", "Assignment", language: language), selection: $assignment) {
-        ForEach(Self.assignmentOptions, id: \.self) { option in
-          Text(option).tag(option)
+        ForEach(assignmentOptions, id: \.self) { option in
+          Text(assignmentLabel(for: option)).tag(option)
         }
       }
 
@@ -74,9 +96,9 @@ struct KeymapView: View {
           .font(.caption.weight(.semibold))
           .foregroundStyle(.secondary)
         HStack {
-          Image(systemName: "arrow.turn.down.left")
+          Image(systemName: assignmentSymbol)
             .foregroundStyle(StudioPalette.blue)
-          Text("\(selectedKey) → \(assignment)")
+          Text("\(selectedKey) → \(assignmentLabel(for: assignment))")
             .font(.callout)
         }
         .padding(12)
@@ -89,7 +111,7 @@ struct KeymapView: View {
 
       Button {
         profileStore.setKeyAssignment(
-          action(for: assignment, selectedKey: selectedKey),
+          assignment.action,
           position: position(for: selectedKey),
           layer: activeLayer == "Fn" ? 1 : 0
         )
@@ -113,16 +135,73 @@ struct KeymapView: View {
     }
     .padding(22)
     .background(.regularMaterial)
+    .onAppear(perform: loadStoredAssignment)
     .onChange(of: selectedKey) { newKey in
-      assignment = storedAssignment(for: newKey) ?? newKey
+      assignment = storedAssignment(for: newKey) ?? defaultAssignment(for: newKey)
       savedLocally = false
     }
     .onChange(of: assignment) { _ in
       savedLocally = false
     }
     .onChange(of: activeLayer) { _ in
-      assignment = storedAssignment(for: selectedKey) ?? selectedKey
-      savedLocally = false
+      loadStoredAssignment()
+    }
+    .onChange(of: profileStore.selectedID) { _ in
+      loadStoredAssignment()
+    }
+    .onChange(of: profileStore.selectedProfile.macros) { _ in
+      if case .macro(let identifier) = assignment,
+        !profileStore.selectedProfile.macros.contains(where: { $0.identifier == identifier })
+      {
+        loadStoredAssignment()
+      }
+    }
+  }
+
+  private var assignmentSymbol: String {
+    switch assignment {
+    case .macro:
+      return "waveform"
+    case .consumerControl:
+      return "speaker.wave.2"
+    case .disabled:
+      return "nosign"
+    case .keyCode:
+      return "arrow.turn.down.left"
+    }
+  }
+
+  private func loadStoredAssignment() {
+    assignment = storedAssignment(for: selectedKey) ?? defaultAssignment(for: selectedKey)
+    savedLocally = false
+  }
+
+  private func defaultAssignment(for key: String) -> KeymapAssignmentChoice {
+    Self.hidKeyCodes[key].map(KeymapAssignmentChoice.keyCode) ?? .disabled
+  }
+
+  private func assignmentLabel(for choice: KeymapAssignmentChoice) -> String {
+    switch choice {
+    case .disabled:
+      return studioText("동작 없음", "No action", language: language)
+    case .keyCode(let code):
+      return Self.hidKeyCodes.first(where: { $0.value == code })?.key
+        ?? String(format: "HID 0x%04X", code)
+    case .consumerControl(let usage):
+      return Self.consumerActions.first(where: { $0.value == usage })?.key
+        ?? String(format: "Consumer 0x%04X", usage)
+    case .macro(let identifier):
+      let name = profileStore.selectedProfile.macros.first(where: {
+        $0.identifier == identifier
+      })?.name
+      return name.map {
+        studioText("매크로 · \($0)", "Macro · \($0)", language: language)
+      }
+        ?? studioText(
+          "누락된 매크로 · \(identifier)",
+          "Missing macro · \(identifier)",
+          language: language
+        )
     }
   }
 
@@ -130,20 +209,7 @@ struct KeymapView: View {
     AK47PhysicalLayout.profilePosition(for: key) ?? 0
   }
 
-  private func action(for assignment: String, selectedKey: String) -> KeyAction {
-    if assignment == "No action" {
-      return .disabled
-    }
-    if let usage = Self.consumerActions[assignment] {
-      return .consumerControl(usage)
-    }
-    return Self.hidKeyCodes[assignment]
-      .map(KeyAction.keyCode)
-      ?? Self.hidKeyCodes[selectedKey].map(KeyAction.keyCode)
-      ?? .disabled
-  }
-
-  private func storedAssignment(for key: String) -> String? {
+  private func storedAssignment(for key: String) -> KeymapAssignmentChoice? {
     guard
       let assignment = profileStore.selectedProfile.keymap.assignments.first(where: {
         $0.layer == (activeLayer == "Fn" ? 1 : 0) && $0.position == position(for: key)
@@ -152,16 +218,7 @@ struct KeymapView: View {
       return nil
     }
 
-    switch assignment.action {
-    case .consumerControl(let usage):
-      return Self.consumerActions.first(where: { $0.value == usage })?.key
-    case .disabled:
-      return "No action"
-    case .macro:
-      return nil
-    case .keyCode(let code):
-      return Self.hidKeyCodes.first(where: { $0.value == code })?.key
-    }
+    return KeymapAssignmentChoice(action: assignment.action)
   }
 
   private static let hidKeyCodes: [String: UInt16] = [
@@ -194,10 +251,14 @@ struct KeymapView: View {
     "Volume Down": 0x00EA,
   ]
 
-  private static let assignmentOptions =
-    ["No action"]
-    + ["Play / Pause", "Previous Track", "Next Track", "Mute", "Volume Down", "Volume Up"]
-    + AK47PhysicalLayout.keyIDs.filter { hidKeyCodes[$0] != nil }
+  private static let consumerActionOrder: [(name: String, usage: UInt16)] = [
+    ("Play / Pause", 0x00CD),
+    ("Previous Track", 0x00B6),
+    ("Next Track", 0x00B5),
+    ("Mute", 0x00E2),
+    ("Volume Down", 0x00EA),
+    ("Volume Up", 0x00E9),
+  ]
 }
 
 private struct KeyboardDraft: View {

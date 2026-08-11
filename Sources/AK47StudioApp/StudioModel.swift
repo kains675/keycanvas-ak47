@@ -110,6 +110,44 @@ enum DeviceWriteState: Equatable {
   case failed(AK47DeviceWriteKind, String)
 }
 
+enum LCDDiagnosticUploadState: Equatable {
+  case idle
+  case uploading(completedPages: Int, totalPages: Int)
+  case succeeded(acknowledgedPages: Int, Date)
+  case failed(acknowledgedPages: Int, String)
+}
+
+enum LCDQualifiedAnimationUploadState: Equatable {
+  case idle
+  case uploading(completedPages: Int, totalPages: Int)
+  case succeeded(frameCount: Int, acknowledgedPages: Int, Date)
+  case failed(acknowledgedPages: Int, String)
+}
+
+struct LCDQualifiedAnimationSnapshot: Identifiable, Sendable {
+  let id = UUID()
+  let project: AK47LCDAnimationProject
+  let plan: AK47LCDUploadPlan
+  let summary: AK47LCDQualifiedUploadPlanSummary
+}
+
+enum LCDQualifiedAnimationPreparationError: LocalizedError {
+  case exactTargetRequired
+  case operationUnavailable
+  case qualificationRequired
+
+  var errorDescription: String? {
+    switch self {
+    case .exactTargetRequired:
+      "The exact wired AK47 revision 0x0115 target and four-collection topology are required."
+    case .operationUnavailable:
+      "Another device operation is active or the target is safety-quarantined."
+    case .qualificationRequired:
+      "A validated durable 40-frame qualification receipt is required."
+    }
+  }
+}
+
 struct DeviceReadProbeSnapshot: Equatable, Sendable {
   let featureLength: Int
   let featureNonzeroByteCount: Int
@@ -127,7 +165,10 @@ protocol HIDCollectionProviding {
 
 struct SystemHIDCollectionProvider: HIDCollectionProviding {
   func collections() throws -> [HIDCollectionRecord] {
-    try HIDEnumerator.enumerate()
+    let records = try HIDEnumerator.enumerate()
+    AK47DeviceQuarantineRecovery.observeSuccessfulHardwareEnumeration(records)
+    AK47LCDExtendedUploadQualification.observeSuccessfulHardwareEnumeration(records)
+    return records
   }
 }
 
@@ -148,6 +189,15 @@ final class StudioModel: ObservableObject {
   @Published private(set) var deviceReadProbeState: DeviceReadProbeState = .idle
   @Published private(set) var perKeyRGBQueryState: PerKeyRGBQueryState = .idle
   @Published private(set) var deviceWriteState: DeviceWriteState = .idle
+  @Published private(set) var lcdDiagnosticUploadState: LCDDiagnosticUploadState = .idle
+  @Published private(set) var lcdQualifiedAnimationUploadState: LCDQualifiedAnimationUploadState =
+    .idle
+  @Published private(set) var lcdQualifiedAnimationVisualReviewSnapshot:
+    LCDQualifiedAnimationSnapshot?
+  @Published private(set) var lcdExtendedQualificationViewState: LCDExtendedQualificationViewState
+  @Published private(set) var lcdExtendedQualificationError: String?
+  @Published private(set) var deviceQuarantineRecoveryState =
+    AK47DeviceQuarantineRecovery.state
   @Published private(set) var lastScan: Date?
 
   let demoMode = true
@@ -161,6 +211,9 @@ final class StudioModel: ObservableObject {
   ) {
     self.provider = provider
     self.profileStore = profileStore ?? LocalProfileStore()
+    lcdExtendedQualificationViewState = Self.extendedQualificationViewState(
+      AK47LCDExtendedUploadQualification.snapshot
+    )
 
     language =
       AppLanguage(
@@ -209,16 +262,18 @@ final class StudioModel: ObservableObject {
       collections = []
       inspectorState = .failed(error.localizedDescription)
     }
+    deviceQuarantineRecoveryState = AK47DeviceQuarantineRecovery.state
+    refreshLCDExtendedQualificationViewState()
 
     lastScan = Date()
   }
 
   var canRunPerKeyRGBQuery: Bool {
-    perKeyRGBQueryRequest != nil && !isDeviceOperationInFlight
+    perKeyRGBQueryRequest != nil && liveDeviceOperationsAreAllowed
   }
 
   var canRunReadOnlyReportProbe: Bool {
-    readProbeIdentity != nil && !isDeviceOperationInFlight
+    readProbeIdentity != nil && liveDeviceOperationsAreAllowed
   }
 
   var canRefreshInspector: Bool {
@@ -226,16 +281,162 @@ final class StudioModel: ObservableObject {
   }
 
   var canSynchronizeClock: Bool {
-    verifiedWiredTarget != nil && !isDeviceOperationInFlight
+    verifiedWiredTarget != nil && liveDeviceOperationsAreAllowed
   }
 
   var canApplyLighting: Bool {
+    verifiedWiredTarget != nil && liveDeviceOperationsAreAllowed
+  }
+
+  var hasVerifiedLCDDiagnosticTarget: Bool {
+    verifiedWiredTarget != nil
+  }
+
+  var canRunLCDDiagnosticUpload: Bool {
+    verifiedWiredTarget != nil && liveDeviceOperationsAreAllowed
+  }
+
+  var qualificationAllowsFreshLCDDiagnostic: Bool {
+    switch lcdExtendedQualificationViewState {
+    case .receiptUnavailable, .invalidatedRequiresFreshDiagnostic:
+      true
+    case .awaitingVisualAttestation, .awaitingObservedAbsence, .awaitingExactReappearance,
+      .awaitingWiredPowerRemovalAttestation, .qualified, .canonicalTransferInProgress,
+      .canonicalVisualMismatchQuarantinePending, .extendedTransferInProgress,
+      .awaitingExtendedVisualAttestation,
+      .extendedVisualMismatchQuarantinePending, .interruptedTransferQuarantinePending,
+      .blocked:
+      false
+    }
+  }
+
+  var canRecordLCDCanonicalVisualAttestation: Bool {
+    let snapshot = AK47LCDExtendedUploadQualification.snapshot
+    guard snapshot.state == .awaitingCanonicalFixtureVisualAttestation,
+      let receiptTarget = snapshot.target,
+      let currentTarget = verifiedWiredTarget
+    else { return false }
+    return receiptTarget == currentTarget && !isDeviceOperationInFlight
+  }
+
+  var canReportLCDCanonicalVisualMismatch: Bool {
+    let snapshot = AK47LCDExtendedUploadQualification.snapshot
+    return
+      (snapshot.state == .awaitingCanonicalFixtureVisualAttestation
+      || snapshot.state == .canonicalVisualMismatchQuarantinePending)
+      && snapshot.target != nil
+      && !isDeviceOperationInFlight
+  }
+
+  var canRecordLCDUSBModeCablePowerCycleAttestation: Bool {
+    let snapshot = AK47LCDExtendedUploadQualification.snapshot
+    guard snapshot.state == .awaitingUSBPowerCycleAttestation,
+      let receiptTarget = snapshot.target,
+      let currentTarget = verifiedWiredTarget
+    else { return false }
+    return receiptTarget == currentTarget && !isDeviceOperationInFlight
+  }
+
+  var canPrepareQualifiedLCDAnimation: Bool {
+    guard let target = verifiedWiredTarget, liveDeviceOperationsAreAllowed else { return false }
+    guard
+      case .qualified(let maximumFrameCount) =
+        AK47LCDExtendedUploadQualification.state(for: target)
+    else { return false }
+    return maximumFrameCount == AK47LCDUploadAdapter.qualifiedMaximumFrameCount
+  }
+
+  var canConfirmQualifiedLCDAnimationVisualResult: Bool {
+    let receipt = AK47LCDExtendedUploadQualification.snapshot
+    guard receipt.state == .awaitingExtendedVisualAttestation,
+      let target = receipt.target,
+      verifiedWiredTarget == target,
+      let review = lcdQualifiedAnimationVisualReviewSnapshot,
+      receipt.pendingContainerSHA256 == review.summary.containerSHA256,
+      receipt.pendingFrameCount == review.summary.frameCount,
+      receipt.pendingPageCount == review.summary.pageCount,
+      !isDeviceOperationInFlight
+    else { return false }
+    return true
+  }
+
+  var canReportQualifiedLCDAnimationVisualMismatch: Bool {
+    let receipt = AK47LCDExtendedUploadQualification.snapshot
+    guard
+      receipt.state == .awaitingExtendedVisualAttestation
+        || receipt.state == .extendedVisualMismatchQuarantinePending,
+      receipt.target != nil,
+      receipt.pendingContainerSHA256 != nil,
+      !isDeviceOperationInFlight
+    else { return false }
+    return true
+  }
+
+  var canReconcileInterruptedLCDTransfer: Bool {
+    let snapshot = AK47LCDExtendedUploadQualification.snapshot
+    switch snapshot.state {
+    case .canonicalTransferInProgress, .extendedTransferInProgress,
+      .interruptedTransferQuarantinePending:
+      return snapshot.target != nil && !isDeviceOperationInFlight
+    default:
+      return false
+    }
+  }
+
+  var canInspectFactoryDefaultPlan: Bool {
     verifiedWiredTarget != nil && !isDeviceOperationInFlight
+  }
+
+  var canAcknowledgeFullPowerCycle: Bool {
+    deviceQuarantineRecoveryState == .awaitingFullPowerCycleAcknowledgement
+      && verifiedWiredTarget != nil
+      && !isDeviceOperationInFlight
+  }
+
+  func acknowledgeFullPowerCycle() throws {
+    guard canAcknowledgeFullPowerCycle, let target = verifiedWiredTarget else {
+      throw AK47DeviceWriteError.operationGatePoisoned
+    }
+    try AK47DeviceQuarantineRecovery.acknowledgeFullPowerCycle(for: target)
+    deviceQuarantineRecoveryState = AK47DeviceQuarantineRecovery.state
   }
 
   private var isDeviceOperationInFlight: Bool {
     if case .writing = deviceWriteState { return true }
+    if case .uploading = lcdDiagnosticUploadState { return true }
+    if case .uploading = lcdQualifiedAnimationUploadState { return true }
     return perKeyRGBQueryState == .reading || deviceReadProbeState == .reading
+  }
+
+  private var liveDeviceOperationsAreAllowed: Bool {
+    !isDeviceOperationInFlight
+      && deviceQuarantineRecoveryState == .notQuarantined
+      && lcdQualificationAllowsOtherDeviceOperations
+  }
+
+  private var lcdQualificationAllowsOtherDeviceOperations: Bool {
+    switch AK47LCDExtendedUploadQualification.snapshot.state {
+    case .unavailable, .qualified, .invalidatedRequiresFreshDiagnostic:
+      true
+    case .persistenceUnavailable, .awaitingCanonicalFixtureVisualAttestation,
+      .awaitingObservedUSBDisconnection, .awaitingExactSamePortReappearance,
+      .awaitingUSBPowerCycleAttestation, .canonicalTransferInProgress,
+      .canonicalVisualMismatchQuarantinePending, .extendedTransferInProgress,
+      .awaitingExtendedVisualAttestation, .extendedVisualMismatchQuarantinePending,
+      .interruptedTransferQuarantinePending:
+      false
+    }
+  }
+
+  /// Builds the immutable dry-run plan shown by the UI. There is deliberately
+  /// no HID submission path for this plan in the current application.
+  func preflightFactoryDefaults() throws -> AK47FactoryResetPlan {
+    guard !isDeviceOperationInFlight, let target = verifiedWiredTarget else {
+      throw AK47DeviceWriteError.invalidTarget(
+        "the exact wired revision 0x0115 target and four-collection topology are required"
+      )
+    }
+    return try AK47FactoryResetPreflight.plan(target: target)
   }
 
   func synchronizeClockNow(lcdItemNumber: UInt8 = 1) {
@@ -276,6 +477,417 @@ final class StudioModel: ObservableObject {
     }
   }
 
+  /// Sends only the allowlisted one-frame/four-corner fixture after the view's
+  /// operation-specific confirmation. Arbitrary editor projects never enter
+  /// this path, and a new one-use authorization is bound to this exact plan.
+  func uploadLCDDiagnosticFixtureOnce() {
+    guard !isDeviceOperationInFlight else { return }
+    guard let target = verifiedWiredTarget else {
+      lcdDiagnosticUploadState = .failed(
+        acknowledgedPages: 0,
+        studioText(
+          "검증된 유선 AK47 revision 0x0115와 정확한 4개 HID collection을 찾지 못했습니다.",
+          "The verified wired AK47 revision 0x0115 with its exact four HID collections was not found.",
+          language: language
+        )
+      )
+      return
+    }
+    guard deviceQuarantineRecoveryState == .notQuarantined else {
+      lcdDiagnosticUploadState = .failed(
+        acknowledgedPages: 0,
+        studioText(
+          "장치 작업이 격리되어 있습니다. selector를 USB 위치에 둔 cable-removal 복구 절차를 먼저 마쳐야 합니다.",
+          "Device operations are quarantined. Complete the required USB-mode cable-removal recovery first.",
+          language: language
+        )
+      )
+      return
+    }
+
+    let plan: AK47LCDUploadPlan
+    do {
+      plan = try AK47LCDUploadPreflight.makeSyntheticPlan(
+        target: target,
+        container: AK47LCDDiagnosticFixture.encode()
+      )
+    } catch {
+      lcdDiagnosticUploadState = .failed(
+        acknowledgedPages: 0,
+        error.localizedDescription
+      )
+      return
+    }
+
+    let authorization = AK47LCDUploadAuthorization(explicitlyConfirming: plan)
+    let totalPages = plan.container.pageCount
+    lcdDiagnosticUploadState = .uploading(completedPages: 0, totalPages: totalPages)
+
+    Task {
+      let result = await Task.detached(priority: .userInitiated) {
+        var acknowledgedPages = 0
+        do {
+          try AK47LCDUploadAdapter.uploadSingleFrame(
+            plan: plan,
+            authorization: authorization
+          ) { completedPages, reportedTotal in
+            acknowledgedPages = completedPages
+            DispatchQueue.main.async { [weak self] in
+              guard let self else { return }
+              if case .uploading = self.lcdDiagnosticUploadState {
+                self.lcdDiagnosticUploadState = .uploading(
+                  completedPages: completedPages,
+                  totalPages: reportedTotal
+                )
+              }
+            }
+          }
+          return (acknowledgedPages, Optional<String>.none)
+        } catch {
+          return (acknowledgedPages, Optional(error.localizedDescription))
+        }
+      }.value
+
+      if let message = result.1 {
+        lcdDiagnosticUploadState = .failed(
+          acknowledgedPages: result.0,
+          message
+        )
+      } else {
+        lcdDiagnosticUploadState = .succeeded(
+          acknowledgedPages: result.0,
+          Date()
+        )
+      }
+      deviceQuarantineRecoveryState = AK47DeviceQuarantineRecovery.state
+      refreshLCDExtendedQualificationViewState()
+    }
+  }
+
+  func recordLCDCanonicalVisualAttestation() {
+    let snapshot = AK47LCDExtendedUploadQualification.snapshot
+    guard canRecordLCDCanonicalVisualAttestation, let target = snapshot.target else {
+      lcdExtendedQualificationError =
+        LCDQualifiedAnimationPreparationError.qualificationRequired.localizedDescription
+      refreshLCDExtendedQualificationViewState()
+      return
+    }
+    do {
+      try AK47LCDExtendedUploadQualification.recordCanonicalFixtureVisualAttestation(
+        for: target,
+        attestation: AK47LCDCanonicalFixtureVisualAttestation(
+          explicitlyConfirmingCanonicalCornersAt: Date()
+        )
+      )
+      lcdExtendedQualificationError = nil
+    } catch {
+      lcdExtendedQualificationError = error.localizedDescription
+    }
+    refreshLCDExtendedQualificationViewState()
+  }
+
+  @discardableResult
+  func reportLCDCanonicalVisualMismatch() -> Bool {
+    let snapshot = AK47LCDExtendedUploadQualification.snapshot
+    guard canReportLCDCanonicalVisualMismatch, let target = snapshot.target else {
+      lcdExtendedQualificationError =
+        "No exact pending canonical LCD visual-review receipt is available."
+      refreshLCDExtendedQualificationViewState()
+      return false
+    }
+    do {
+      try AK47LCDExtendedUploadQualification.reportCanonicalFixtureVisualMismatch(
+        for: target
+      )
+      lcdExtendedQualificationError = nil
+    } catch {
+      lcdExtendedQualificationError = error.localizedDescription
+    }
+    deviceQuarantineRecoveryState = AK47DeviceQuarantineRecovery.state
+    refreshLCDExtendedQualificationViewState()
+    return AK47LCDExtendedUploadQualification.snapshot.state
+      == .invalidatedRequiresFreshDiagnostic
+  }
+
+  func recordLCDUSBModeCablePowerCycleAttestation() {
+    let snapshot = AK47LCDExtendedUploadQualification.snapshot
+    guard canRecordLCDUSBModeCablePowerCycleAttestation, let target = snapshot.target else {
+      lcdExtendedQualificationError =
+        LCDQualifiedAnimationPreparationError.qualificationRequired.localizedDescription
+      refreshLCDExtendedQualificationViewState()
+      return
+    }
+    do {
+      try AK47LCDExtendedUploadQualification.acknowledgeUSBModeCablePowerCycle(
+        for: target,
+        attestation: AK47LCDUSBModeCablePowerCycleAttestation(
+          explicitlyConfirmingUSBModeCableRemovalAt: Date()
+        )
+      )
+      lcdExtendedQualificationError = nil
+    } catch {
+      lcdExtendedQualificationError = error.localizedDescription
+    }
+    refreshLCDExtendedQualificationViewState()
+  }
+
+  /// Copies the current in-memory editor value before detached encoding. Later
+  /// editor mutations cannot change the returned plan, summary, or digest.
+  func prepareQualifiedLCDAnimation(
+    project: AK47LCDAnimationProject
+  ) async throws -> LCDQualifiedAnimationSnapshot {
+    guard !isDeviceOperationInFlight else {
+      throw LCDQualifiedAnimationPreparationError.operationUnavailable
+    }
+    guard let target = verifiedWiredTarget else {
+      throw LCDQualifiedAnimationPreparationError.exactTargetRequired
+    }
+    guard canPrepareQualifiedLCDAnimation else {
+      throw LCDQualifiedAnimationPreparationError.qualificationRequired
+    }
+
+    let immutableProject = project
+    let container = try await Task.detached(priority: .userInitiated) {
+      try AK47LCDUploadAdapter.encodeQualifiedAnimation(immutableProject)
+    }.value
+
+    guard !isDeviceOperationInFlight, verifiedWiredTarget == target else {
+      throw LCDQualifiedAnimationPreparationError.operationUnavailable
+    }
+    guard
+      case .qualified(let maximumFrameCount) =
+        AK47LCDExtendedUploadQualification.state(for: target),
+      maximumFrameCount == AK47LCDUploadAdapter.qualifiedMaximumFrameCount
+    else {
+      throw LCDQualifiedAnimationPreparationError.qualificationRequired
+    }
+
+    let plan = try AK47LCDUploadPreflight.makeSyntheticPlan(
+      target: target,
+      container: container
+    )
+    let summary = try AK47LCDUploadAdapter.makeQualifiedPlanSummary(plan)
+    return LCDQualifiedAnimationSnapshot(
+      project: immutableProject,
+      plan: plan,
+      summary: summary
+    )
+  }
+
+  func uploadQualifiedLCDAnimation(_ snapshot: LCDQualifiedAnimationSnapshot) {
+    guard !isDeviceOperationInFlight else { return }
+    let plan = snapshot.plan
+    guard let target = verifiedWiredTarget, target == plan.target else {
+      lcdQualifiedAnimationUploadState = .failed(
+        acknowledgedPages: 0,
+        LCDQualifiedAnimationPreparationError.exactTargetRequired.localizedDescription
+      )
+      return
+    }
+    guard liveDeviceOperationsAreAllowed else {
+      lcdQualifiedAnimationUploadState = .failed(
+        acknowledgedPages: 0,
+        LCDQualifiedAnimationPreparationError.operationUnavailable.localizedDescription
+      )
+      return
+    }
+    guard
+      case .qualified(let maximumFrameCount) =
+        AK47LCDExtendedUploadQualification.state(for: target),
+      maximumFrameCount == AK47LCDUploadAdapter.qualifiedMaximumFrameCount
+    else {
+      lcdQualifiedAnimationUploadState = .failed(
+        acknowledgedPages: 0,
+        LCDQualifiedAnimationPreparationError.qualificationRequired.localizedDescription
+      )
+      refreshLCDExtendedQualificationViewState()
+      return
+    }
+
+    let authorization = AK47LCDQualifiedUploadAuthorization(explicitlyConfirming: plan)
+    let totalPages = plan.container.pageCount
+    lcdQualifiedAnimationVisualReviewSnapshot = nil
+    lcdQualifiedAnimationUploadState = .uploading(completedPages: 0, totalPages: totalPages)
+
+    Task {
+      let result = await Task.detached(priority: .userInitiated) {
+        var acknowledgedPages = 0
+        do {
+          try AK47LCDUploadAdapter.uploadQualifiedAnimation(
+            plan: plan,
+            authorization: authorization
+          ) { completedPages, reportedTotal in
+            acknowledgedPages = completedPages
+            DispatchQueue.main.async { [weak self] in
+              guard let self else { return }
+              if case .uploading = self.lcdQualifiedAnimationUploadState {
+                self.lcdQualifiedAnimationUploadState = .uploading(
+                  completedPages: completedPages,
+                  totalPages: reportedTotal
+                )
+              }
+            }
+          }
+          return (acknowledgedPages, Optional<String>.none)
+        } catch {
+          return (acknowledgedPages, Optional(error.localizedDescription))
+        }
+      }.value
+
+      if let message = result.1 {
+        lcdQualifiedAnimationUploadState = .failed(
+          acknowledgedPages: result.0,
+          message
+        )
+      } else {
+        lcdQualifiedAnimationUploadState = .succeeded(
+          frameCount: plan.container.frameCount,
+          acknowledgedPages: result.0,
+          Date()
+        )
+        lcdQualifiedAnimationVisualReviewSnapshot = snapshot
+      }
+      deviceQuarantineRecoveryState = AK47DeviceQuarantineRecovery.state
+      refreshLCDExtendedQualificationViewState()
+    }
+  }
+
+  @discardableResult
+  func recordQualifiedLCDAnimationVisualResult() -> Bool {
+    let receipt = AK47LCDExtendedUploadQualification.snapshot
+    guard canConfirmQualifiedLCDAnimationVisualResult,
+      let target = receipt.target,
+      let digest = receipt.pendingContainerSHA256
+    else {
+      lcdExtendedQualificationError =
+        "The exact immutable expected preview is unavailable, so a correct visual result cannot be recorded."
+      refreshLCDExtendedQualificationViewState()
+      return false
+    }
+    do {
+      try AK47LCDExtendedUploadQualification.recordQualifiedUploadVisualAttestation(
+        for: target,
+        attestation: AK47LCDQualifiedUploadVisualAttestation(
+          explicitlyConfirmingContainerSHA256: digest,
+          at: Date()
+        )
+      )
+      lcdQualifiedAnimationVisualReviewSnapshot = nil
+      lcdExtendedQualificationError = nil
+    } catch {
+      lcdExtendedQualificationError = error.localizedDescription
+    }
+    refreshLCDExtendedQualificationViewState()
+    guard
+      case .qualified(let maximumFrameCount) =
+        AK47LCDExtendedUploadQualification.snapshot.state
+    else { return false }
+    return maximumFrameCount == AK47LCDUploadAdapter.qualifiedMaximumFrameCount
+  }
+
+  @discardableResult
+  func reportQualifiedLCDAnimationVisualMismatch() -> Bool {
+    let receipt = AK47LCDExtendedUploadQualification.snapshot
+    guard canReportQualifiedLCDAnimationVisualMismatch,
+      let target = receipt.target,
+      let digest = receipt.pendingContainerSHA256
+    else {
+      lcdExtendedQualificationError =
+        "No exact pending LCD visual-review receipt is available."
+      refreshLCDExtendedQualificationViewState()
+      return false
+    }
+    do {
+      try AK47LCDExtendedUploadQualification.reportQualifiedUploadVisualMismatch(
+        for: target,
+        containerSHA256: digest
+      )
+      lcdQualifiedAnimationVisualReviewSnapshot = nil
+      lcdExtendedQualificationError = nil
+    } catch {
+      lcdExtendedQualificationError = error.localizedDescription
+    }
+    deviceQuarantineRecoveryState = AK47DeviceQuarantineRecovery.state
+    refreshLCDExtendedQualificationViewState()
+    return AK47LCDExtendedUploadQualification.snapshot.state
+      == .invalidatedRequiresFreshDiagnostic
+  }
+
+  @discardableResult
+  func reconcileInterruptedLCDTransfer() -> Bool {
+    let snapshot = AK47LCDExtendedUploadQualification.snapshot
+    guard canReconcileInterruptedLCDTransfer, let target = snapshot.target else {
+      lcdExtendedQualificationError =
+        "No exact interrupted LCD transfer receipt is available for reconciliation."
+      refreshLCDExtendedQualificationViewState()
+      return false
+    }
+    do {
+      try AK47LCDExtendedUploadQualification.reconcileInterruptedTransfer(for: target)
+      lcdExtendedQualificationError = nil
+    } catch {
+      lcdExtendedQualificationError = error.localizedDescription
+    }
+    deviceQuarantineRecoveryState = AK47DeviceQuarantineRecovery.state
+    refreshLCDExtendedQualificationViewState()
+    return AK47LCDExtendedUploadQualification.snapshot.state
+      == .invalidatedRequiresFreshDiagnostic
+  }
+
+  private func refreshLCDExtendedQualificationViewState() {
+    lcdExtendedQualificationViewState = Self.extendedQualificationViewState(
+      AK47LCDExtendedUploadQualification.snapshot
+    )
+  }
+
+  private static func extendedQualificationViewState(
+    _ snapshot: AK47LCDExtendedUploadQualificationSnapshot
+  ) -> LCDExtendedQualificationViewState {
+    switch snapshot.state {
+    case .unavailable:
+      .receiptUnavailable
+    case .persistenceUnavailable:
+      .blocked(
+        "The durable LCD qualification receipt could not be loaded. Live LCD transfer remains locked."
+      )
+    case .awaitingCanonicalFixtureVisualAttestation:
+      .awaitingVisualAttestation
+    case .awaitingObservedUSBDisconnection:
+      .awaitingObservedAbsence
+    case .awaitingExactSamePortReappearance:
+      .awaitingExactReappearance
+    case .awaitingUSBPowerCycleAttestation:
+      .awaitingWiredPowerRemovalAttestation
+    case .qualified(let maximumFrameCount):
+      .qualified(maximumFrameCount: maximumFrameCount)
+    case .canonicalTransferInProgress:
+      .canonicalTransferInProgress
+    case .canonicalVisualMismatchQuarantinePending:
+      .canonicalVisualMismatchQuarantinePending
+    case .extendedTransferInProgress:
+      .extendedTransferInProgress
+    case .awaitingExtendedVisualAttestation:
+      if let digest = snapshot.pendingContainerSHA256,
+        let frameCount = snapshot.pendingFrameCount,
+        let pageCount = snapshot.pendingPageCount
+      {
+        .awaitingExtendedVisualAttestation(
+          containerSHA256: digest,
+          frameCount: frameCount,
+          pageCount: pageCount
+        )
+      } else {
+        .blocked("The durable LCD visual-review receipt is incomplete.")
+      }
+    case .extendedVisualMismatchQuarantinePending:
+      .extendedVisualMismatchQuarantinePending
+    case .interruptedTransferQuarantinePending:
+      .interruptedTransferQuarantinePending
+    case .invalidatedRequiresFreshDiagnostic:
+      .invalidatedRequiresFreshDiagnostic
+    }
+  }
+
   private func runDeviceWrite(
     kind: AK47DeviceWriteKind,
     operation: @escaping @Sendable (AK47WiredDeviceTarget) throws -> Void
@@ -309,6 +921,7 @@ final class StudioModel: ObservableObject {
       } else {
         deviceWriteState = .succeeded(kind, Date())
       }
+      deviceQuarantineRecoveryState = AK47DeviceQuarantineRecovery.state
     }
   }
 
@@ -330,7 +943,14 @@ final class StudioModel: ObservableObject {
     perKeyRGBQueryState = .reading
     Task {
       let result = await Task.detached(priority: .userInitiated) {
-        Result { try AK47PerKeyRGBQueryAdapter.query(request) }
+        Result {
+          try AK47PerKeyRGBQueryAdapter.query(
+            request,
+            authorization: AK47PerKeyRGBQueryAuthorization(
+              explicitlyConfirming: request
+            )
+          )
+        }
       }.value
 
       switch result {
@@ -339,6 +959,7 @@ final class StudioModel: ObservableObject {
       case .failure(let error):
         perKeyRGBQueryState = .failed(error.localizedDescription)
       }
+      deviceQuarantineRecoveryState = AK47DeviceQuarantineRecovery.state
     }
   }
 
@@ -369,6 +990,7 @@ final class StudioModel: ObservableObject {
       case .failure(let error):
         deviceReadProbeState = .failed(error.localizedDescription)
       }
+      deviceQuarantineRecoveryState = AK47DeviceQuarantineRecovery.state
     }
   }
 
@@ -382,9 +1004,12 @@ final class StudioModel: ObservableObject {
         && group.candidates.bulkOutput.count == 1
     }
     guard exact.count == 1, let group = exact.first else { return nil }
+    let command = group.candidates.command[0]
     return ReadProbeIdentity(
       product: "Archon AK47",
-      locationID: group.identifier.locationID
+      locationID: group.identifier.locationID,
+      versionNumber: command.versionNumber,
+      serialNumber: command.serialNumber
     )
   }
 
@@ -409,7 +1034,8 @@ final class StudioModel: ObservableObject {
     }
     return AK47PerKeyRGBQueryRequest(
       locationID: locationID,
-      versionNumber: 0x0115
+      versionNumber: 0x0115,
+      serialNumber: record.serialNumber
     )
   }
 
@@ -443,7 +1069,8 @@ final class StudioModel: ObservableObject {
     guard samePhysicalDevice.count == 4 else { return nil }
     return AK47WiredDeviceTarget(
       locationID: locationID,
-      versionNumber: 0x0115
+      versionNumber: 0x0115,
+      serialNumber: command.serialNumber
     )
   }
 
@@ -456,6 +1083,8 @@ final class StudioModel: ObservableObject {
         productID: HIDEnumerator.productID,
         product: identity.product,
         locationID: identity.locationID,
+        versionNumber: identity.versionNumber,
+        serialNumber: identity.serialNumber,
         usagePage: 0xFF13,
         usage: 0x0001,
         reportType: .feature,
@@ -472,6 +1101,8 @@ final class StudioModel: ObservableObject {
           productID: HIDEnumerator.productID,
           product: identity.product,
           locationID: identity.locationID,
+          versionNumber: identity.versionNumber,
+          serialNumber: identity.serialNumber,
           usagePage: 0xFF68,
           usage: 0x0061,
           reportType: .output,
@@ -498,6 +1129,8 @@ final class StudioModel: ObservableObject {
 private struct ReadProbeIdentity: Equatable, Sendable {
   let product: String
   let locationID: UInt64?
+  let versionNumber: UInt64?
+  let serialNumber: String?
 }
 
 extension Array where Element == HIDCollectionRecord {

@@ -15,6 +15,8 @@ public struct HIDReadOnlyReportRequest: Equatable, Sendable {
   public let productID: UInt64
   public let product: String?
   public let locationID: UInt64?
+  public let versionNumber: UInt64?
+  public let serialNumber: String?
   public let usagePage: UInt64
   public let usage: UInt64
   public let reportType: HIDReadOnlyReportType
@@ -26,6 +28,8 @@ public struct HIDReadOnlyReportRequest: Equatable, Sendable {
     productID: UInt64,
     product: String? = nil,
     locationID: UInt64? = nil,
+    versionNumber: UInt64? = nil,
+    serialNumber: String? = nil,
     usagePage: UInt64,
     usage: UInt64,
     reportType: HIDReadOnlyReportType,
@@ -36,6 +40,8 @@ public struct HIDReadOnlyReportRequest: Equatable, Sendable {
     self.productID = productID
     self.product = product
     self.locationID = locationID
+    self.versionNumber = versionNumber
+    self.serialNumber = serialNumber
     self.usagePage = usagePage
     self.usage = usage
     self.reportType = reportType
@@ -70,6 +76,12 @@ public struct HIDReadOnlyReportRequest: Equatable, Sendable {
     if let locationID, record.locationID != locationID {
       return false
     }
+    if let versionNumber, record.versionNumber != versionNumber {
+      return false
+    }
+    if let serialNumber, record.serialNumber != serialNumber {
+      return false
+    }
     switch reportType {
     case .feature:
       return record.maxFeatureReportSize == UInt64(expectedLength)
@@ -96,6 +108,7 @@ public enum HIDReadOnlyReportError: Error, Equatable, LocalizedError, Sendable {
   case noMatchingCollection
   case ambiguousCollections(Int)
   case deviceBusy
+  case operationGatePoisoned
   case openFailed(UInt32)
   case readFailed(UInt32)
   case invalidResponseLength(expected: Int, actual: Int)
@@ -110,6 +123,9 @@ public enum HIDReadOnlyReportError: Error, Equatable, LocalizedError, Sendable {
       return "refusing to read because \(count) HID collections match"
     case .deviceBusy:
       return "another HID diagnostic operation is already in progress"
+    case .operationGatePoisoned:
+      return
+        "AK47 HID operations are quarantined. Keep the selector in USB mode, disconnect the cable until the device is unpowered, refresh Device Inspector while it is absent, then reconnect at the original USB location and refresh again. Relaunching or switching to 2.4G/Bluetooth does not clear the quarantine."
     case .openFailed(let code):
       return String(format: "opening the HID collection failed (0x%08X)", code)
     case .readFailed(let code):
@@ -126,8 +142,13 @@ public enum HIDReadOnlyReportError: Error, Equatable, LocalizedError, Sendable {
 public enum HIDReadOnlyReportReader {
   public static func read(_ request: HIDReadOnlyReportRequest) throws -> HIDReadOnlyReport {
     try request.validate()
-    guard HIDDeviceOperationGate.acquire() else {
+    switch HIDDeviceOperationGate.acquireResult(for: request.quarantineIdentity) {
+    case .acquired:
+      break
+    case .busy:
       throw HIDReadOnlyReportError.deviceBusy
+    case .quarantined:
+      throw HIDReadOnlyReportError.operationGatePoisoned
     }
     defer { HIDDeviceOperationGate.release() }
 

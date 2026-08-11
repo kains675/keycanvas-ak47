@@ -96,10 +96,15 @@ final class AK47DeviceWriteHardwareTests: XCTestCase {
       authorization: AK47DeviceWriteAuthorization(explicitlyConfirming: .perKeyRGB)
     )
 
+    let request = AK47PerKeyRGBQueryRequest(
+      locationID: target.locationID,
+      versionNumber: target.versionNumber,
+      serialNumber: target.serialNumber
+    )
     let snapshot = try AK47PerKeyRGBQueryAdapter.query(
-      AK47PerKeyRGBQueryRequest(
-        locationID: target.locationID,
-        versionNumber: target.versionNumber
+      request,
+      authorization: AK47PerKeyRGBQueryAuthorization(
+        explicitlyConfirming: request
       )
     )
     let expectedReadbackPalette = [
