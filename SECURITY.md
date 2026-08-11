@@ -22,13 +22,13 @@ accepts only the project-authored 240×135 black four-corner diagnostic fixture
 whose encoded container is exactly one frame, 16×4,096-byte pages and SHA-256
 `312f98fd023d49711f73a677895b1bf48ac246c7dd687c813ed5642f42128bec`.
 Every other bootstrap image, hash, frame count, page count or arbitrary payload
-is rejected. After a fresh Core-owned durable qualification sequence, a separate
-path accepts only an immutable current-editor plan of 1...40 frames. The exact
-target, both unique FF13/FF68 collection roles, durable lease and matching one-
-use plan authorization are revalidated before submission. Visible risk
-acknowledgements cover overwrite, missing readback/rollback, other-client
-shutdown and prepared USB-mode cable-removal recovery; a separate final
-destructive confirmation creates each one-use authorization.
+is rejected. Policy v2 keeps ordinary editor Apply locked after the fresh
+canonical qualification sequence and exposes only an exact immutable
+140-frame/2,215-page boundary plan. The exact target, both unique FF13/FF68
+collection roles, durable lease and matching one-use plan authorization are
+revalidated before submission. Canonical, boundary and normal Apply surfaces
+share one explicit experimental-feature risk acknowledgement; Core safety checks
+remain independent of that UI state.
 
 The repository can inspect a pure dry-run risk model for function settings,
 per-key RGB and onboard lighting. It exposes counts and page-risk metadata only,
@@ -130,8 +130,9 @@ image, GIF and movie input. They produce full composited 240×135 frames, a 256-
 hardware transfer.
 
 A narrowly typed state machine, immutable plan and concrete macOS adapter exist
-for the fixed diagnostic bootstrap and the separately qualified 1...40-frame
-editor-snapshot path. Authorized-private successful Windows observations on the
+for the fixed diagnostic bootstrap, the policy-v2 exact 140-frame boundary
+trial and the finally qualified 1...140-frame editor-snapshot path.
+Authorized-private successful Windows observations on the
 exact `bcdDevice 0x0115` target established the minimum command ordering,
 descriptor roles, report lengths and completed-Output/input-report sequence.
 The private captures, vendor media and captured payloads are not repository
@@ -148,6 +149,14 @@ endpoint capture. An evidence-only macOS trial recorded all 16 sequences,
 commit, exact postflight and the user's visual confirmation of the four corner
 positions and orientation. It predates the production receipt build and cannot
 be imported or backfilled as authorization.
+
+Separately, the production KeyCanvas policy-v2 trial on the exact target
+completed all 2,215 expected per-page input sequences, commit and exact
+postflight. The user confirmed full playback, looping, colors and frame order;
+USB-mode cable removal produced real absence; same-port reconnection produced
+exactly four collections; and the animation persisted. Final unpowered
+attestation advanced the receipt to `qualified(maximumFrameCount: 140)`. This
+macOS result is separate from the authorized-private Windows observations.
 
 The operation consumes one exact authorization, sends 16 pages once, never
 retries, and provides no current-content readback, backup, rollback or recovery
@@ -167,28 +176,36 @@ the adapter neither retries nor emits an additional `0xF0` finalize command.
 Sixteen sequences show only that 16 completed Output calls each elicited an
 input report with the expected ID, length and prefix. The input carries no page
 index and is not LCD readback, page acceptance, flash-integrity evidence, proof
-of visible orientation/color, or proof that 40 frames fit safely. The app
+of visible orientation/color, or proof that 140 frames fit safely. The app
 requests protection against idle system sleep and sudden/automatic termination
 during the attempt, but cannot eliminate power loss, forced quit, a user-
 initiated sleep/shutdown or interference from another nonexclusive HID client.
 
-The 140-frame/2,215-page ceiling remains offline host-format behavior and must
-not be treated as a physical capacity guarantee. A production receipt store
-starts empty: the qualified live path remains locked until a fresh canonical
+The 140-frame/2,215-page ceiling remains host-format behavior and must not be
+treated as a physical capacity guarantee. A production policy-v2 receipt store
+starts fail-closed: the boundary path remains locked until a fresh canonical
 transfer records all 16 expected sequences and exact postflight, the user
 confirms its visible corners, real enumeration observes USB disconnection then
 the same target at the original location with exact four collections, and the
 user attests that cable removal in USB mode visibly unpowered the LCD, LEDs and
-device. Historical evidence cannot be imported or backfilled. Receipt load or
-persistence failure remains fail-closed.
+device. A validated exact v1 qualified receipt may migrate only its canonical
+and recovery provenance into this boundary-waiting state; it never migrates
+140-frame success authority. Earlier evidence-only results cannot be imported
+or backfilled. The state then admits only one exact 140-frame, 9,072,640-byte,
+2,215-page immutable snapshot. Receipt load or persistence failure remains
+fail-closed.
 
-The qualified UI copies the current in-memory editor project before encoding;
+The boundary UI copies the current in-memory editor project before encoding;
 later edits cannot change its plan. Its final one-use confirmation displays and
 binds the exact target, frame/page/byte counts, address range, SHA-256 and delay
-conversion. The adapter rejects more than 40 frames, a non-minimal padded
-container, a different receipt target or plan fingerprint, and any missing or
-stale qualification lease. These checks do not solve missing readback or
-physical recovery.
+conversion. After host success, a positive result is accepted only while the app
+retains the exact submitted RGB565 preview. Policy v2 then requires a second
+USB-mode cable-removal, real-absence, same-port exact-four reappearance and
+unpowered attestation sequence. Only afterward may the normal path accept
+immutable 1...140-frame plans. Before that point every general Apply is locked.
+The completed exact-target trial supplies empirical KeyCanvas evidence, but its
+ACKs carry no page index and it does not provide LCD readback, physical-
+partition proof or rollback.
 
 After every qualified host transfer, Core persists a visual-review-pending
 digest/frame/page identity instead of immediately reopening qualification. A

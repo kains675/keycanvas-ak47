@@ -61,10 +61,11 @@ boundary; this is not presented as a strict two-team clean-room project.
 12. **LCD transport** has narrowly typed state machines, immutable plans,
     synthetic mock-session tests and one concrete default-off macOS adapter. Its
     bootstrap accepts only one project-authored 240×135 four-corner frame with
-    an exact container hash and 16 pages. A separate Core-owned durable receipt
-    may qualify only the current editor's immutable 1...40-frame plan after the
-    ordered visual and USB cable-removal recovery evidence. Physical partition
-    bounds, readback, backup and rollback remain unverified.
+    an exact container hash and 16 pages. Policy v2 next admits only one exact
+    immutable 140-frame/2,215-page boundary plan. Its submitted-byte visual
+    review and a second ordered USB cable-removal recovery sequence must finish
+    before the receipt qualifies general immutable 1...140-frame editor plans.
+    Physical partition bounds, readback, backup and rollback remain unverified.
 13. **Durable transaction quarantine** arms a target-specific marker before the
     first HID report call of an F5 query, confirmed Feature write or LCD
     diagnostic. A failure after submission or unconfirmed cancellation keeps
@@ -121,10 +122,15 @@ Those Windows observations associated FF13 with interface `MI_03`, FF68 with
 macOS, descriptor selection is followed by a direct IORegistry ancestry check:
 FF13 must resolve to `bInterfaceNumber 3`, FF68 to `bInterfaceNumber 2`, and
 both must share the same exact physical USB parent/identity. IOHID does not
-select or directly observe numeric endpoint `0x03` or `0x84`. The adapter's
-existence is not a successful macOS hardware observation; that claim requires
-an explicit user trial in which 16 completed Outputs each elicit the expected
-input-report sequence and the visible result is recorded.
+select or directly observe numeric endpoint `0x03` or `0x84`.
+
+Separately from that Windows evidence, the production KeyCanvas macOS
+policy-v2 trial on the exact target completed all 2,215 expected per-page input
+sequences, commit and exact postflight. The user confirmed full animation
+playback, looping, colors and frame order, then observed USB-mode cable-off real
+absence, same-port exact-four reappearance and animation persistence. The final
+unpowered attestation advanced the receipt to
+`qualified(maximumFrameCount: 140)`.
 
 The non-executable default-restore plan statically accounts for seven inferred
 internal-flash erase/program transactions across four distinct pages. This
@@ -249,23 +255,35 @@ requires each completed Output to elicit one valid 64-byte input report before
 continuing. It never retries and performs an exact four-collection postflight.
 
 A successful canonical host transaction creates only the next durable receipt
-state. Qualification additionally requires the user's exact visible-corner
-attestation, a real enumeration observing absence after cable removal in USB
-mode, the same target's exact four collections reappearing at the original USB
-location, and the final statement that cable removal visibly powered down the
-LCD, LEDs and device. These transitions persist after every step. The production
-store starts empty; an earlier trial, application preference, checkbox or absent
-quarantine marker cannot import, backfill or synthesize authority. Receipt load
-or save failure is fail-closed.
+state. Canonical qualification additionally requires the user's exact visible-
+corner attestation, a real enumeration observing absence after cable removal in
+USB mode, the same target's exact four collections reappearing at the original
+USB location, and the final statement that cable removal visibly powered down
+the LCD, LEDs and device. These transitions persist after every step. The
+production store is fail-closed. A validated v1 qualified receipt may migrate only its
+canonical and ordered recovery provenance into policy v2's boundary-waiting
+state; it cannot synthesize 140-frame success authority. An earlier evidence-
+only trial, application preference, checkbox or absent quarantine marker cannot
+import or backfill authority. Receipt load or save failure is fail-closed.
 
-Once qualified, the editor copies its current in-memory project as a value and
-Core encodes only that immutable 1...40-frame snapshot with the qualified
-2,592,768-byte budget. The final sheet displays the exact target, frame/page/
-byte counts, address range, SHA-256 and delay conversion before creating a
-single-use plan authorization. The adapter revalidates the same limits and
-claims a target-and-plan-bound durable lease before opening HID. Later editor or
-library changes cannot alter the submitted bytes. More than 40 frames is
-rejected without truncation or force.
+Policy v2 does not open general Apply at that point. It exposes a separate
+boundary admission for exactly 140 frames, 2,215 pages, 9,072,640 bytes and the
+exclusive transfer range ending at `0xFE7000`. The editor copies its current
+in-memory project as a value; the final sheet displays the exact target,
+frame/page/byte counts, address range, full SHA-256 and delay conversion before
+the shared single experimental acknowledgement creates a one-use authorization.
+Later editor or library changes cannot alter those submitted bytes. Any count
+other than 140 is rejected by the boundary admission.
+
+Boundary host success persists the exact submitted digest/frame/page identity
+and uses the existing RGB565-decoded expected animation for visual comparison.
+An exact visual match still does not open general Apply: policy v2 then requires
+USB-mode cable removal, real zero-collection enumeration, same-port exact-four
+reappearance and a final unpowered attestation. Only that complete sequence
+produces `qualified(maximumFrameCount: 140)`. Before it, every ordinary
+1...140-frame Apply remains locked; afterward the normal exact-plan path accepts
+1...140 without truncation or force. The exact production target completed that
+sequence and now supplies empirical KeyCanvas live evidence through 140 frames.
 
 Neither path has content readback, backup, rollback or resume. The durable
 write-ahead quarantine is armed before its first report, and uncertain submitted
@@ -288,11 +306,12 @@ larger capacity. The adapter holds a process activity to reduce idle sleep and
 automatic termination, but power loss, forced quit, user-initiated
 sleep/shutdown and another nonexclusive HID client remain residual risks.
 
-The 140-frame/2,215-page software ceiling applies only to offline encoding and
-must never be described as a verified partition end or live limit. The live
-bootstrap maximum is one fixed frame; the separately qualified maximum is 40.
-The latter remains unreachable until the fresh ordered receipt above is
-complete. A qualified host transfer does not immediately restore authority:
+The 140-frame/2,215-page software ceiling and its successful exact-target trial
+must never be described as a verified partition end. The 2,215 input reports
+carry no page index, and there is still no LCD readback, physical-partition proof
+or rollback. Policy v2 permits the exact maximum only through the boundary and
+attestation sequence described above. A normal qualified host transfer does not
+immediately restore authority:
 Core persists the submitted digest/frame/page identity in a visual-review-
 pending state. The UI decodes the exact submitted RGB565 container bytes for
 comparison with the actual LCD. Only an exact-match attestation bound to that

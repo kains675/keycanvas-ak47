@@ -285,17 +285,11 @@ private struct DisplayAnimationEditorSession: View {
       }
       Spacer()
       Label(
-        studioModel.lcdExtendedQualificationViewState.permitsExtendedUpload
-          ? studioText("최대 40프레임 적용 가능", "Apply up to 40 frames", language: language)
-          : studioText("장치 업로드 잠김", "Device upload locked", language: language),
-        systemImage: studioModel.lcdExtendedQualificationViewState.permitsExtendedUpload
-          ? "checkmark.shield" : "lock.shield"
+        deviceUploadCapabilityLabel,
+        systemImage: deviceUploadCapabilitySymbol
       )
       .font(.caption.weight(.semibold))
-      .foregroundStyle(
-        studioModel.lcdExtendedQualificationViewState.permitsExtendedUpload
-          ? StudioPalette.mint : .secondary
-      )
+      .foregroundStyle(deviceUploadCapabilityTint)
       if presentation == .sheet {
         Button(studioText("닫기", "Close", language: language)) {
           guard !isQualifiedUploadActive, !model.isLoading else { return }
@@ -320,6 +314,40 @@ private struct DisplayAnimationEditorSession: View {
     }
     .padding(.horizontal, 20)
     .padding(.vertical, 14)
+  }
+
+  private var deviceUploadCapabilityLabel: String {
+    if studioModel.lcdExtendedQualificationViewState.permitsExtendedUpload {
+      return studioText("최대 140프레임 적용 가능", "Apply up to 140 frames", language: language)
+    }
+    if studioModel.lcdExtendedQualificationViewState.permitsMaximumBoundaryTrial {
+      return studioText(
+        "정확히 140프레임 경계 시험 필요",
+        "Exact 140-frame boundary trial required",
+        language: language
+      )
+    }
+    return studioText("장치 업로드 잠김", "Device upload locked", language: language)
+  }
+
+  private var deviceUploadCapabilitySymbol: String {
+    if studioModel.lcdExtendedQualificationViewState.permitsExtendedUpload {
+      return "checkmark.shield"
+    }
+    if studioModel.lcdExtendedQualificationViewState.permitsMaximumBoundaryTrial {
+      return "gauge.with.dots.needle.100percent"
+    }
+    return "lock.shield"
+  }
+
+  private var deviceUploadCapabilityTint: Color {
+    if studioModel.lcdExtendedQualificationViewState.permitsExtendedUpload {
+      return StudioPalette.mint
+    }
+    if studioModel.lcdExtendedQualificationViewState.permitsMaximumBoundaryTrial {
+      return StudioPalette.coral
+    }
+    return .secondary
   }
 
   private func frameRail(project: AK47LCDAnimationProject) -> some View {
@@ -1018,7 +1046,17 @@ private struct DisplayAnimationEditorSession: View {
           Task { await prepareQualifiedUploadConfirmation() }
         } label: {
           Label(
-            studioText("현재 편집을 장치에 적용…", "Apply current edit to device…", language: language),
+            maximumBoundaryTrialPending
+              ? studioText(
+                "140프레임 경계 시험…",
+                "Run 140-frame boundary trial…",
+                language: language
+              )
+              : studioText(
+                "현재 편집을 장치에 적용…",
+                "Apply current edit to device…",
+                language: language
+              ),
             systemImage: "display.and.arrow.down")
         }
         .buttonStyle(.borderedProminent)
@@ -1040,9 +1078,9 @@ private struct DisplayAnimationEditorSession: View {
       VStack(alignment: .leading, spacing: 5) {
         ProgressView(value: Double(completedPages), total: Double(totalPages))
         Text(
-          studioText(
-            "장기 전송 중 · expected input \(completedPages) / \(totalPages). 앱 종료·sleep·케이블 분리를 하지 마세요.",
-            "Long transfer in progress · expected inputs \(completedPages) / \(totalPages). Do not quit, sleep, or disconnect the cable.",
+          LCDUploadProgressPresentation.text(
+            completedAcknowledgements: completedPages,
+            totalAcknowledgements: totalPages,
             language: language
           )
         )
@@ -1053,8 +1091,8 @@ private struct DisplayAnimationEditorSession: View {
       HStack(spacing: 10) {
         Label(
           studioText(
-            "\(frameCount)프레임 host sequence 완료 · expected input \(acknowledgedPages)회. LCD 육안 검증 전에는 성공으로 확정하지 않습니다.",
-            "\(frameCount)-frame host sequence completed · \(acknowledgedPages) expected inputs. Success is not established before visual LCD review.",
+            "\(frameCount)프레임 전송 완료(ACK \(acknowledgedPages)회). ‘결과 비교’를 눌러 실제 LCD를 확인하세요.",
+            "\(frameCount)-frame transfer complete (\(acknowledgedPages) ACKs). Choose Compare result and check the actual LCD.",
             language: language
           ),
           systemImage: "eye.trianglebadge.exclamationmark"
@@ -1101,8 +1139,12 @@ private struct DisplayAnimationEditorSession: View {
 
   private var canPrepareQualifiedUpload: Bool {
     guard let project = model.project else { return false }
-    return studioModel.canPrepareQualifiedLCDAnimation
-      && (1...AK47LCDUploadAdapter.qualifiedMaximumFrameCount).contains(project.frames.count)
+    let frameCountAllowed =
+      maximumBoundaryTrialPending
+      ? project.frames.count == AK47LCDUploadAdapter.qualifiedMaximumFrameCount
+      : (1...AK47LCDUploadAdapter.qualifiedMaximumFrameCount).contains(project.frames.count)
+    return studioModel.canPrepareAnyLCDAnimation
+      && frameCountAllowed
       && model.canEncodeDeviceContainer
       && !model.hasPendingSourceTransform
       && !model.isLoading
@@ -1115,6 +1157,10 @@ private struct DisplayAnimationEditorSession: View {
     return false
   }
 
+  private var maximumBoundaryTrialPending: Bool {
+    studioModel.lcdExtendedQualificationViewState.permitsMaximumBoundaryTrial
+  }
+
   private var qualifiedUploadBoundaryText: String {
     if model.hasPendingSourceTransform {
       return studioText(
@@ -1123,16 +1169,30 @@ private struct DisplayAnimationEditorSession: View {
         language: language
       )
     }
+    if maximumBoundaryTrialPending {
+      guard model.project?.frames.count == AK47LCDUploadAdapter.qualifiedMaximumFrameCount else {
+        return studioText(
+          "일반 Apply는 잠겨 있습니다. 현재 편집을 정확히 140프레임으로 만든 뒤 경계 시험을 진행하세요.",
+          "General Apply is locked. Make the current edit exactly 140 frames to run the boundary trial.",
+          language: language
+        )
+      }
+      return studioText(
+        "140프레임 경계 시험을 시작할 준비가 됐습니다.",
+        "The 140-frame boundary test is ready to start.",
+        language: language
+      )
+    }
     guard studioModel.canPrepareQualifiedLCDAnimation else {
       return studioText(
-        "Core의 전체 영속 qualification receipt가 검증되기 전까지 Apply 잠김",
-        "Apply is locked until Core validates the complete durable qualification receipt",
+        "장치 적용 준비가 끝나지 않았습니다. 아래 ‘장치 적용 준비·복구’에서 다음 단계를 확인하세요.",
+        "Device Apply is not ready. Check Device Apply readiness & recovery below for the next step.",
         language: language
       )
     }
     return studioText(
-      "현재 in-memory 편집을 복사해 exact snapshot으로만 승인",
-      "Copies the current in-memory edit and authorizes only that exact snapshot",
+      "현재 편집을 장치에 적용할 준비가 됐습니다.",
+      "The current edit is ready to apply to the device.",
       language: language
     )
   }
@@ -1154,8 +1214,8 @@ private struct DisplayAnimationEditorSession: View {
     }
     if project.frames.count > AK47LCDUploadAdapter.qualifiedMaximumFrameCount {
       return studioText(
-        "\(project.frames.count)프레임입니다. 최대 40프레임이며 자동 자르기나 강제 전송은 하지 않습니다.",
-        "This edit has \(project.frames.count) frames. The maximum is 40; no truncation or forced upload is performed.",
+        "\(project.frames.count)프레임입니다. 최대 140프레임이며 자동 자르기나 강제 전송은 하지 않습니다.",
+        "This edit has \(project.frames.count) frames. The maximum is 140; no truncation or forced upload is performed.",
         language: language
       )
     }
@@ -1309,19 +1369,11 @@ private struct LCDQualifiedUploadConfirmationSheet: View {
       VStack(alignment: .leading, spacing: 18) {
         VStack(alignment: .leading, spacing: 5) {
           Text(
-            studioText(
-              "현재 편집 snapshot 최종 확인",
-              "Final current-edit snapshot confirmation",
-              language: language
-            )
+            confirmationTitle
           )
           .font(.title2.bold())
           Text(
-            studioText(
-              "이 창을 열 때 복사·인코딩한 불변 값입니다. 이후 편집이나 library 원본 변경은 이 plan에 반영되지 않습니다.",
-              "This is the immutable value copied and encoded when this sheet opened. Later edits or library-source changes cannot alter this plan.",
-              language: language
-            )
+            confirmationSubtitle
           )
           .font(.callout)
           .foregroundStyle(.secondary)
@@ -1443,8 +1495,12 @@ private struct LCDQualifiedUploadConfirmationSheet: View {
         HStack {
           Label(
             studioText(
-              "승인은 위 SHA와 exact target을 포함한 plan 하나에만 유효합니다.",
-              "Authorization is valid only for this one plan, including the shown SHA and exact target.",
+              snapshot.purpose == .maximumBoundaryTrial
+                ? "이 경계 승인은 정확히 140프레임·2215페이지와 위 SHA·exact target인 plan 하나에만 유효합니다."
+                : "승인은 위 SHA와 exact target을 포함한 plan 하나에만 유효합니다.",
+              snapshot.purpose == .maximumBoundaryTrial
+                ? "This boundary authorization is valid only for this exact 140-frame, 2,215-page plan with the shown SHA and target."
+                : "Authorization is valid only for this one plan, including the shown SHA and exact target.",
               language: language
             ),
             systemImage: "lock.shield"
@@ -1453,7 +1509,17 @@ private struct LCDQualifiedUploadConfirmationSheet: View {
           .foregroundStyle(.secondary)
           Spacer()
           Button(
-            studioText("이 snapshot 한 번 적용", "Apply this snapshot once", language: language),
+            snapshot.purpose == .maximumBoundaryTrial
+              ? studioText(
+                "140프레임 경계 시험 한 번 실행",
+                "Run 140-frame boundary trial once",
+                language: language
+              )
+              : studioText(
+                "이 snapshot 한 번 적용",
+                "Apply this snapshot once",
+                language: language
+              ),
             role: .destructive
           ) {
             guard applyAcknowledgement.consume() else { return }
@@ -1470,6 +1536,36 @@ private struct LCDQualifiedUploadConfirmationSheet: View {
   }
 
   private var summary: AK47LCDQualifiedUploadPlanSummary { snapshot.summary }
+
+  private var confirmationTitle: String {
+    if snapshot.purpose == .maximumBoundaryTrial {
+      return studioText(
+        "140프레임 경계 시험 확인",
+        "Confirm 140-frame boundary test",
+        language: language
+      )
+    }
+    return studioText(
+      "현재 편집 적용 확인",
+      "Confirm current edit Apply",
+      language: language
+    )
+  }
+
+  private var confirmationSubtitle: String {
+    if snapshot.purpose == .maximumBoundaryTrial {
+      return studioText(
+        "지금 표시된 140프레임만 한 번 전송합니다. 이후 편집 내용은 이번 전송에 반영되지 않습니다.",
+        "Only the 140 frames shown here will be sent once. Later edits will not affect this transfer.",
+        language: language
+      )
+    }
+    return studioText(
+      "지금 표시된 편집 내용만 한 번 전송합니다. 이후 편집 내용은 이번 전송에 반영되지 않습니다.",
+      "Only the edit shown here will be sent once. Later edits will not affect this transfer.",
+      language: language
+    )
+  }
 
   private var oddDelayFrameIndices: [Int] {
     snapshot.plan.container.sourceDelaysMilliseconds.enumerated().compactMap {
@@ -1532,17 +1628,13 @@ struct LCDQualifiedUploadVisualReviewSheet: View {
     VStack(alignment: .leading, spacing: 18) {
       VStack(alignment: .leading, spacing: 5) {
         Text(
-          studioText(
-            "실제 LCD와 불변 예상 애니메이션 비교",
-            "Compare the actual LCD with the immutable expected animation",
-            language: language
-          )
+          visualReviewTitle
         )
         .font(.title2.bold())
         Text(
           studioText(
-            "host sequence 완료는 화면 성공의 증명이 아닙니다. 아래 미리보기는 source RGBA가 아니라 실제 제출한 little-endian RGB565 바이트를 다시 해석한 결과입니다. 내용·순서·방향·색을 키보드 LCD와 직접 비교하세요.",
-            "Host-sequence completion does not prove the visible result. The preview below decodes the exact submitted little-endian RGB565 bytes, not the source RGBA. Compare its content, order, orientation, and colors directly with the keyboard LCD.",
+            "아래 화면은 실제 전송한 RGB565 데이터를 다시 표시한 것입니다. 키보드 LCD와 내용·순서·방향·색을 직접 비교하세요.",
+            "The preview below reproduces the RGB565 data that was actually sent. Compare its content, order, orientation, and colors with the keyboard LCD.",
             language: language
           )
         )
@@ -1669,7 +1761,17 @@ struct LCDQualifiedUploadVisualReviewSheet: View {
         }
         .disabled(!canReportMismatch)
         Button(
-          studioText("정확히 일치함 기록", "Record exact visual match", language: language)
+          isMaximumBoundaryTrial
+            ? studioText(
+              "일치 기록 후 전원 복구로",
+              "Record match and continue to power recovery",
+              language: language
+            )
+            : studioText(
+              "정확히 일치함 기록",
+              "Record exact visual match",
+              language: language
+            )
         ) {
           onConfirmCorrect()
         }
@@ -1713,12 +1815,35 @@ struct LCDQualifiedUploadVisualReviewSheet: View {
     } message: {
       Text(
         studioText(
-          "이 선택은 영속 40프레임 자격을 폐기합니다. 재시도하지 말고 USB mode에서 cable을 분리해 완전 무전원·real absence·same-port exact4 복구 뒤 새 고정 진단부터 진행하세요.",
-          "This revokes the durable 40-frame qualification. Do not retry; in USB mode, remove the cable and complete unpowered, real-absence, same-port exact-four recovery before a fresh fixed diagnostic.",
+          isMaximumBoundaryTrial
+            ? "이 선택은 140프레임 경계 provenance를 폐기하고 장치를 격리합니다. 재시도하지 말고 USB-mode cable-removal 복구 뒤 새 고정 진단부터 진행하세요."
+            : "이 선택은 영속 140프레임 자격을 폐기합니다. 재시도하지 말고 USB mode에서 cable을 분리해 완전 무전원·real absence·same-port exact4 복구 뒤 새 고정 진단부터 진행하세요.",
+          isMaximumBoundaryTrial
+            ? "This revokes the 140-frame boundary provenance and quarantines the device. Do not retry; complete USB-mode cable-removal recovery, then restart from a fresh fixed diagnostic."
+            : "This revokes the durable 140-frame qualification. Do not retry; in USB mode, remove the cable and complete unpowered, real-absence, same-port exact-four recovery before a fresh fixed diagnostic.",
           language: language
         )
       )
     }
+  }
+
+  private var isMaximumBoundaryTrial: Bool {
+    snapshot.purpose == .maximumBoundaryTrial
+  }
+
+  private var visualReviewTitle: String {
+    if isMaximumBoundaryTrial {
+      return studioText(
+        "140프레임 전송 결과 비교",
+        "Compare the 140-frame transfer result",
+        language: language
+      )
+    }
+    return studioText(
+      "전송 결과 비교",
+      "Compare transfer result",
+      language: language
+    )
   }
 
   private var expectedImage: NSImage? {
@@ -2234,8 +2359,8 @@ final class DisplayAnimationEditorModel: ObservableObject {
       )
     }
     return studioText(
-      "검증된 로컬 RGB565 컨테이너 파일만 만듭니다. 내보내기는 장치 전송을 승인하지 않으며, 자격이 검증된 editor snapshot Apply는 별도 exact-plan 확인이 필요합니다.",
-      "Creates only a validated local RGB565 container file. Export does not authorize device transfer; qualified editor-snapshot Apply requires a separate exact-plan confirmation.",
+      "로컬 RGB565 컨테이너 파일만 만들며 장치로 전송하지 않습니다.",
+      "Creates a local RGB565 container file only and does not send it to the device.",
       language: language
     )
   }

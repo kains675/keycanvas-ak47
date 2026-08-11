@@ -14,6 +14,7 @@ public enum AK47LCDUploadAdapterError: Error, Equatable, LocalizedError, Sendabl
   case qualifiedPageCountMismatch(expected: Int, actual: Int)
   case qualifiedContainerLengthMismatch(expected: Int, actual: Int)
   case qualifiedTransferEndMismatch(expected: UInt64, actual: UInt64)
+  case maximumBoundaryTrialPlanRequired
   case qualificationReceiptNotRecordedAfterSuccessfulTransfer
   case qualificationLeaseFinalizationFailed
   case noMatchingFeatureCollection
@@ -56,7 +57,7 @@ public enum AK47LCDUploadAdapterError: Error, Equatable, LocalizedError, Sendabl
     case .fixtureNotAllowlisted:
       "Only the reviewed four-corner diagnostic fixture is enabled for the first LCD experiment."
     case .qualifiedFrameCountNotEnabled(let count):
-      "The qualified LCD path accepts 1...40 frames; got \(count)."
+      "The qualified LCD path accepts 1...\(AK47LCDUploadAdapter.qualifiedMaximumFrameCount) frames; got \(count)."
     case .qualifiedPageCountMismatch(let expected, let actual):
       "The qualified LCD container must use the minimal \(expected) pages; got \(actual)."
     case .qualifiedContainerLengthMismatch(let expected, let actual):
@@ -67,8 +68,10 @@ public enum AK47LCDUploadAdapterError: Error, Equatable, LocalizedError, Sendabl
         expected,
         actual
       )
+    case .maximumBoundaryTrialPlanRequired:
+      "The maximum-boundary trial requires exactly 140 frames, 2,215 minimal pages, 9,072,640 bytes, and transfer end 0xFE7000."
     case .qualificationReceiptNotRecordedAfterSuccessfulTransfer:
-      "The canonical LCD transfer completed, but its qualification candidate could not be recorded durably. The 1...40-frame path remains locked."
+      "The canonical LCD transfer completed, but its qualification candidate could not be recorded durably. The 1...\(AK47LCDUploadAdapter.qualifiedMaximumFrameCount)-frame path remains locked."
     case .qualificationLeaseFinalizationFailed:
       "The LCD transfer lease could not be finalized durably. The qualified path remains locked."
     case .noMatchingFeatureCollection:
@@ -154,6 +157,31 @@ public final class AK47LCDUploadAuthorization: @unchecked Sendable {
 /// It cannot authorize the canonical first experiment and is consumed before
 /// the durable qualification lease is claimed.
 public final class AK47LCDQualifiedUploadAuthorization: @unchecked Sendable {
+  private let lock = NSLock()
+  private let fingerprint: Data
+  private var consumed = false
+
+  package init(explicitlyConfirming plan: AK47LCDUploadPlan) {
+    fingerprint = AK47LCDUploadPlanFingerprint.make(plan)
+  }
+
+  package func consume(for plan: AK47LCDUploadPlan) throws {
+    let requestedFingerprint = AK47LCDUploadPlanFingerprint.make(plan)
+    lock.lock()
+    defer { lock.unlock() }
+    guard fingerprint == requestedFingerprint else {
+      throw AK47LCDUploadAdapterError.authorizationMismatch
+    }
+    guard !consumed else {
+      throw AK47LCDUploadAdapterError.authorizationAlreadyConsumed
+    }
+    consumed = true
+  }
+}
+
+/// A separate one-use authority for the exact maximum-boundary trial. It
+/// cannot authorize the canonical fixture or an ordinary qualified upload.
+public final class AK47LCDMaximumBoundaryUploadAuthorization: @unchecked Sendable {
   private let lock = NSLock()
   private let fingerprint: Data
   private var consumed = false
@@ -373,10 +401,12 @@ public enum AK47LCDUploadAdapter {
   public static let enabledFrameCount = 1
   public static let enabledPageCount = 16
   public static let enabledContainerByteCount = 65_536
-  public static let qualifiedMaximumFrameCount = 40
-  public static let qualifiedMaximumPageCount = 633
-  public static let qualifiedMaximumContainerByteCount = 2_592_768
-  public static let qualifiedTransferEndAddressExclusive: UInt64 = 0x9B_9000
+  /// Policy-v2 live limits are intentionally independent of the offline format
+  /// ceiling. Any future live expansion requires a new policy revision.
+  public static let qualifiedMaximumFrameCount = 140
+  public static let qualifiedMaximumPageCount = 2_215
+  public static let qualifiedMaximumContainerByteCount = 9_072_640
+  public static let qualifiedTransferEndAddressExclusive: UInt64 = 0xFE_7000
 
   /// Encodes the immutable editor snapshot with the same bounded budget and FF
   /// padding contract that the qualified live adapter independently enforces.
@@ -428,7 +458,39 @@ public enum AK47LCDUploadAdapter {
     return AK47LCDQualifiedUploadPlanSummary(plan: plan)
   }
 
-  /// Runs a qualified 1...40-frame immutable editor snapshot. A durable
+  /// Returns an exact immutable summary only for the one 140-frame boundary
+  /// trial that can upgrade a migrated or newly canonical v2 receipt.
+  public static func makeMaximumBoundaryTrialPlanSummary(
+    _ plan: AK47LCDUploadPlan
+  ) throws -> AK47LCDQualifiedUploadPlanSummary {
+    try AK47LCDUploadPreflight.validateStructuralModel(plan)
+    try validateMaximumBoundaryTrial(plan)
+    return AK47LCDQualifiedUploadPlanSummary(plan: plan)
+  }
+
+  /// Runs the one exact maximum-boundary trial. This is deliberately separate
+  /// from ordinary qualified uploads, which remain locked until boundary host,
+  /// visual, absence, same-port reappearance and power evidence are durable.
+  public static func uploadMaximumBoundaryTrial(
+    plan: AK47LCDUploadPlan,
+    authorization: AK47LCDMaximumBoundaryUploadAuthorization,
+    progress: (_ completedPages: Int, _ totalPages: Int) -> Void = { _, _ in }
+  ) throws {
+    try performMaximumBoundaryTrial(
+      plan: plan,
+      authorization: authorization,
+      qualification: SystemAK47LCDExtendedUploadQualificationService(),
+      driver: SystemAK47LCDUploadDriver(),
+      gate: SystemAK47LCDUploadGate(),
+      activityProvider: SystemAK47LCDUploadActivityProvider(),
+      sleep: { milliseconds in
+        Thread.sleep(forTimeInterval: Double(milliseconds) / 1_000)
+      },
+      progress: progress
+    )
+  }
+
+  /// Runs a qualified 1...140-frame immutable editor snapshot. A durable
   /// qualification lease is claimed before any HID handle/report path can be
   /// reached, and host success remains pending until a separate visual result.
   public static func uploadQualifiedAnimation(
@@ -570,6 +632,58 @@ public enum AK47LCDUploadAdapter {
 
     do {
       try qualification.finishQualifiedLease(lease, outcome: .succeeded)
+    } catch {
+      throw AK47LCDUploadAdapterError.qualificationLeaseFinalizationFailed
+    }
+  }
+
+  static func performMaximumBoundaryTrial(
+    plan: AK47LCDUploadPlan,
+    authorization: AK47LCDMaximumBoundaryUploadAuthorization,
+    qualification: any AK47LCDExtendedUploadQualificationServicing,
+    driver: any AK47LCDUploadSystemDriving,
+    gate: any AK47LCDUploadOperationGating,
+    activityProvider: any AK47LCDUploadActivityProviding,
+    sleep: @escaping AK47LCDUploadStateMachine.Sleep,
+    progress: (_ completedPages: Int, _ totalPages: Int) -> Void = { _, _ in }
+  ) throws {
+    try AK47LCDUploadPreflight.validateStructuralModel(plan)
+    try validateMaximumBoundaryTrial(plan)
+    try authorization.consume(for: plan)
+
+    let lease = try qualification.claimMaximumBoundaryTransfer(
+      plan: plan,
+      planFingerprintSHA256: AK47LCDUploadPlanFingerprint.hex(plan)
+    )
+    do {
+      try performValidatedTransfer(
+        plan: plan,
+        qualificationAdmission: lease.gateAdmission,
+        driver: driver,
+        gate: gate,
+        activityProvider: activityProvider,
+        sleep: sleep,
+        progress: progress
+      )
+    } catch {
+      let outcome: AK47LCDQualifiedUploadLeaseOutcome
+      if let adapterError = error as? AK47LCDUploadAdapterError,
+        case .partialTransactionQuarantined = adapterError
+      {
+        outcome = .submittedOrUncertainFailure
+      } else {
+        outcome = .failedBeforeSubmissionWithConfirmedCleanup
+      }
+      do {
+        try qualification.finishMaximumBoundaryTransfer(lease, outcome: outcome)
+      } catch {
+        throw AK47LCDUploadAdapterError.qualificationLeaseFinalizationFailed
+      }
+      throw error
+    }
+
+    do {
+      try qualification.finishMaximumBoundaryTransfer(lease, outcome: .succeeded)
     } catch {
       throw AK47LCDUploadAdapterError.qualificationLeaseFinalizationFailed
     }
@@ -788,6 +902,25 @@ public enum AK47LCDUploadAdapter {
     }
   }
 
+  static func validateMaximumBoundaryTrial(_ plan: AK47LCDUploadPlan) throws {
+    try validateQualifiedAnimation(plan)
+    let container = plan.container
+    let transferEnd =
+      AK47LCDUploadPreflight.externalFlashStartAddress
+      + UInt64(container.data.count)
+    guard container.frameCount == qualifiedMaximumFrameCount,
+      container.pageCount == qualifiedMaximumPageCount,
+      container.unpaddedByteCount
+        == AK47LCDFormat.headerByteCount
+        + (AK47LCDFormat.rgb565FrameByteCount * qualifiedMaximumFrameCount),
+      container.data.count == qualifiedMaximumContainerByteCount,
+      container.partitionBudgetByteCount == qualifiedMaximumContainerByteCount,
+      transferEnd == qualifiedTransferEndAddressExclusive
+    else {
+      throw AK47LCDUploadAdapterError.maximumBoundaryTrialPlanRequired
+    }
+  }
+
   static func errorForFailedTransaction(
     _ error: Error,
     evidence: HIDDeviceTransactionEvidence
@@ -899,6 +1032,26 @@ private final class SystemAK47LCDExtendedUploadQualificationService:
     outcome: AK47LCDQualifiedUploadLeaseOutcome
   ) throws {
     try AK47LCDExtendedUploadQualification.finishQualifiedLease(lease, outcome: outcome)
+  }
+
+  func claimMaximumBoundaryTransfer(
+    plan: AK47LCDUploadPlan,
+    planFingerprintSHA256: String
+  ) throws -> AK47LCDMaximumBoundaryTransferLease {
+    try AK47LCDExtendedUploadQualification.claimMaximumBoundaryTransfer(
+      plan: plan,
+      planFingerprintSHA256: planFingerprintSHA256
+    )
+  }
+
+  func finishMaximumBoundaryTransfer(
+    _ lease: AK47LCDMaximumBoundaryTransferLease,
+    outcome: AK47LCDQualifiedUploadLeaseOutcome
+  ) throws {
+    try AK47LCDExtendedUploadQualification.finishMaximumBoundaryTransfer(
+      lease,
+      outcome: outcome
+    )
   }
 }
 

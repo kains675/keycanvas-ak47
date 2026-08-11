@@ -165,8 +165,8 @@ struct DeviceInspectorView: View {
         .font(.headline)
         Text(
           studioText(
-            "읽기 전용 report 진단은 GetReport만 호출합니다. F5 RGB 조회와 시계·조명 적용은 서로 다른 확인이 필요합니다. Display의 고정 1프레임 LCD bootstrap과 fresh 영속 자격을 마친 현재 editor의 불변 1…40프레임 plan은 각각 동일한 단일 실험 기능 위험 확인 뒤 한 번만 적용할 수 있습니다. 기본값 계획은 Settings dry-run이고 raw LCD payload·키맵·매크로·펌웨어·부트로더 live 작업은 없습니다.",
-            "The read-only report probe calls GetReport only. F5 RGB and clock or lighting apply require distinct confirmations. Display's fixed one-frame LCD bootstrap and an immutable 1...40-frame current-editor plan with fresh durable qualification may each be applied once after the same single experimental-feature risk acknowledgement. Default-plan inspection is a Settings dry run, and there is no raw LCD payload, keymap, macro, firmware, or bootloader live operation.",
+            "읽기 전용 report 진단은 GetReport만 호출합니다. F5 RGB 조회와 시계·조명 적용은 서로 다른 확인이 필요합니다. Display의 고정 1프레임 bootstrap 뒤에는 정확히 140프레임 경계 시험만 허용되며, 제출 화면 육안 일치와 두 번째 USB 전원 제거 복구를 마친 exact 대상에서만 일반 1…140프레임 plan이 열립니다. 두 LCD 전송은 동일한 단일 실험 기능 확인을 사용합니다. 기본값 계획은 Settings dry-run이고 raw LCD payload·키맵·매크로·펌웨어·부트로더 live 작업은 없습니다.",
+            "The read-only report probe calls GetReport only. F5 RGB and clock or lighting apply require distinct confirmations. After Display's fixed one-frame bootstrap, only the exact 140-frame boundary trial is admitted; general 1...140-frame plans open only after submitted-display visual match and a second wired-power-removal recovery on the exact target. Both LCD transfers use the same single experimental-feature acknowledgement. Default-plan inspection is a Settings dry run, and there is no raw LCD payload, keymap, macro, firmware, or bootloader live operation.",
             language: language
           )
         )

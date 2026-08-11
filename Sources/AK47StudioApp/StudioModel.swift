@@ -124,8 +124,23 @@ enum LCDQualifiedAnimationUploadState: Equatable {
   case failed(acknowledgedPages: Int, String)
 }
 
+enum LCDQualifiedAnimationUploadPurpose: Equatable, Sendable {
+  case maximumBoundaryTrial
+  case qualified
+
+  func accepts(frameCount: Int) -> Bool {
+    switch self {
+    case .maximumBoundaryTrial:
+      frameCount == AK47LCDUploadAdapter.qualifiedMaximumFrameCount
+    case .qualified:
+      (1...AK47LCDUploadAdapter.qualifiedMaximumFrameCount).contains(frameCount)
+    }
+  }
+}
+
 struct LCDQualifiedAnimationSnapshot: Identifiable, Sendable {
   let id = UUID()
+  let purpose: LCDQualifiedAnimationUploadPurpose
   let project: AK47LCDAnimationProject
   let plan: AK47LCDUploadPlan
   let summary: AK47LCDQualifiedUploadPlanSummary
@@ -135,6 +150,7 @@ enum LCDQualifiedAnimationPreparationError: LocalizedError {
   case exactTargetRequired
   case operationUnavailable
   case qualificationRequired
+  case exactMaximumBoundaryFrameCountRequired(actual: Int)
 
   var errorDescription: String? {
     switch self {
@@ -143,7 +159,9 @@ enum LCDQualifiedAnimationPreparationError: LocalizedError {
     case .operationUnavailable:
       "Another device operation is active or the target is safety-quarantined."
     case .qualificationRequired:
-      "A validated durable 40-frame qualification receipt is required."
+      "The final durable 140-frame qualification receipt is required."
+    case .exactMaximumBoundaryFrameCountRequired(let actual):
+      "The maximum-boundary trial requires exactly 140 frames; this edit has \(actual)."
     }
   }
 }
@@ -301,9 +319,13 @@ final class StudioModel: ObservableObject {
     case .receiptUnavailable, .invalidatedRequiresFreshDiagnostic:
       true
     case .awaitingVisualAttestation, .awaitingObservedAbsence, .awaitingExactReappearance,
-      .awaitingWiredPowerRemovalAttestation, .qualified, .canonicalTransferInProgress,
-      .canonicalVisualMismatchQuarantinePending, .extendedTransferInProgress,
-      .awaitingExtendedVisualAttestation,
+      .awaitingWiredPowerRemovalAttestation, .awaitingMaximumBoundaryTrial,
+      .maximumBoundaryTransferInProgress, .awaitingMaximumBoundaryVisualAttestation,
+      .awaitingMaximumBoundaryObservedAbsence, .awaitingMaximumBoundaryExactReappearance,
+      .awaitingMaximumBoundaryWiredPowerRemovalAttestation,
+      .maximumBoundaryVisualMismatchQuarantinePending, .qualified,
+      .canonicalTransferInProgress, .canonicalVisualMismatchQuarantinePending,
+      .extendedTransferInProgress, .awaitingExtendedVisualAttestation,
       .extendedVisualMismatchQuarantinePending, .interruptedTransferQuarantinePending,
       .blocked:
       false
@@ -330,11 +352,23 @@ final class StudioModel: ObservableObject {
 
   var canRecordLCDUSBModeCablePowerCycleAttestation: Bool {
     let snapshot = AK47LCDExtendedUploadQualification.snapshot
-    guard snapshot.state == .awaitingUSBPowerCycleAttestation,
-      let receiptTarget = snapshot.target,
-      let currentTarget = verifiedWiredTarget
-    else { return false }
+    guard let receiptTarget = snapshot.target, let currentTarget = verifiedWiredTarget else {
+      return false
+    }
+    switch snapshot.state {
+    case .awaitingUSBPowerCycleAttestation,
+      .awaitingMaximumBoundaryUSBPowerCycleAttestation:
+      break
+    default:
+      return false
+    }
     return receiptTarget == currentTarget && !isDeviceOperationInFlight
+  }
+
+  var canPrepareMaximumBoundaryLCDAnimation: Bool {
+    guard let target = verifiedWiredTarget, liveDeviceOperationsAreAllowed else { return false }
+    return AK47LCDExtendedUploadQualification.state(for: target)
+      == .awaitingMaximumBoundaryTrial
   }
 
   var canPrepareQualifiedLCDAnimation: Bool {
@@ -346,10 +380,13 @@ final class StudioModel: ObservableObject {
     return maximumFrameCount == AK47LCDUploadAdapter.qualifiedMaximumFrameCount
   }
 
+  var canPrepareAnyLCDAnimation: Bool {
+    canPrepareMaximumBoundaryLCDAnimation || canPrepareQualifiedLCDAnimation
+  }
+
   var canConfirmQualifiedLCDAnimationVisualResult: Bool {
     let receipt = AK47LCDExtendedUploadQualification.snapshot
-    guard receipt.state == .awaitingExtendedVisualAttestation,
-      let target = receipt.target,
+    guard let target = receipt.target,
       verifiedWiredTarget == target,
       let review = lcdQualifiedAnimationVisualReviewSnapshot,
       receipt.pendingContainerSHA256 == review.summary.containerSHA256,
@@ -357,25 +394,38 @@ final class StudioModel: ObservableObject {
       receipt.pendingPageCount == review.summary.pageCount,
       !isDeviceOperationInFlight
     else { return false }
-    return true
+    switch receipt.state {
+    case .awaitingMaximumBoundaryVisualAttestation:
+      return review.purpose == .maximumBoundaryTrial
+    case .awaitingExtendedVisualAttestation:
+      return review.purpose == .qualified
+    default:
+      return false
+    }
   }
 
   var canReportQualifiedLCDAnimationVisualMismatch: Bool {
     let receipt = AK47LCDExtendedUploadQualification.snapshot
     guard
-      receipt.state == .awaitingExtendedVisualAttestation
-        || receipt.state == .extendedVisualMismatchQuarantinePending,
       receipt.target != nil,
       receipt.pendingContainerSHA256 != nil,
       !isDeviceOperationInFlight
     else { return false }
-    return true
+    switch receipt.state {
+    case .awaitingMaximumBoundaryVisualAttestation,
+      .maximumBoundaryVisualMismatchQuarantinePending,
+      .awaitingExtendedVisualAttestation, .extendedVisualMismatchQuarantinePending:
+      return true
+    default:
+      return false
+    }
   }
 
   var canReconcileInterruptedLCDTransfer: Bool {
     let snapshot = AK47LCDExtendedUploadQualification.snapshot
     switch snapshot.state {
-    case .canonicalTransferInProgress, .extendedTransferInProgress,
+    case .canonicalTransferInProgress, .maximumBoundaryTransferInProgress,
+      .extendedTransferInProgress,
       .interruptedTransferQuarantinePending:
       return snapshot.target != nil && !isDeviceOperationInFlight
     default:
@@ -416,11 +466,17 @@ final class StudioModel: ObservableObject {
 
   private var lcdQualificationAllowsOtherDeviceOperations: Bool {
     switch AK47LCDExtendedUploadQualification.snapshot.state {
-    case .unavailable, .qualified, .invalidatedRequiresFreshDiagnostic:
+    case .unavailable, .awaitingMaximumBoundaryTrial, .qualified,
+      .invalidatedRequiresFreshDiagnostic:
       true
     case .persistenceUnavailable, .awaitingCanonicalFixtureVisualAttestation,
       .awaitingObservedUSBDisconnection, .awaitingExactSamePortReappearance,
-      .awaitingUSBPowerCycleAttestation, .canonicalTransferInProgress,
+      .awaitingUSBPowerCycleAttestation, .maximumBoundaryTransferInProgress,
+      .awaitingMaximumBoundaryVisualAttestation,
+      .awaitingMaximumBoundaryObservedUSBDisconnection,
+      .awaitingMaximumBoundaryExactSamePortReappearance,
+      .awaitingMaximumBoundaryUSBPowerCycleAttestation,
+      .maximumBoundaryVisualMismatchQuarantinePending, .canonicalTransferInProgress,
       .canonicalVisualMismatchQuarantinePending, .extendedTransferInProgress,
       .awaitingExtendedVisualAttestation, .extendedVisualMismatchQuarantinePending,
       .interruptedTransferQuarantinePending:
@@ -618,12 +674,24 @@ final class StudioModel: ObservableObject {
       return
     }
     do {
-      try AK47LCDExtendedUploadQualification.acknowledgeUSBModeCablePowerCycle(
-        for: target,
-        attestation: AK47LCDUSBModeCablePowerCycleAttestation(
-          explicitlyConfirmingUSBModeCableRemovalAt: Date()
-        )
+      let attestation = AK47LCDUSBModeCablePowerCycleAttestation(
+        explicitlyConfirmingUSBModeCableRemovalAt: Date()
       )
+      switch snapshot.state {
+      case .awaitingUSBPowerCycleAttestation:
+        try AK47LCDExtendedUploadQualification.acknowledgeUSBModeCablePowerCycle(
+          for: target,
+          attestation: attestation
+        )
+      case .awaitingMaximumBoundaryUSBPowerCycleAttestation:
+        try AK47LCDExtendedUploadQualification
+          .acknowledgeMaximumBoundaryUSBModeCablePowerCycle(
+            for: target,
+            attestation: attestation
+          )
+      default:
+        throw LCDQualifiedAnimationPreparationError.qualificationRequired
+      }
       lcdExtendedQualificationError = nil
     } catch {
       lcdExtendedQualificationError = error.localizedDescription
@@ -642,7 +710,23 @@ final class StudioModel: ObservableObject {
     guard let target = verifiedWiredTarget else {
       throw LCDQualifiedAnimationPreparationError.exactTargetRequired
     }
-    guard canPrepareQualifiedLCDAnimation else {
+    let purpose: LCDQualifiedAnimationUploadPurpose
+    switch AK47LCDExtendedUploadQualification.state(for: target) {
+    case .awaitingMaximumBoundaryTrial:
+      guard
+        LCDQualifiedAnimationUploadPurpose.maximumBoundaryTrial.accepts(
+          frameCount: project.frames.count
+        )
+      else {
+        throw LCDQualifiedAnimationPreparationError.exactMaximumBoundaryFrameCountRequired(
+          actual: project.frames.count
+        )
+      }
+      purpose = .maximumBoundaryTrial
+    case .qualified(let maximumFrameCount)
+    where maximumFrameCount == AK47LCDUploadAdapter.qualifiedMaximumFrameCount:
+      purpose = .qualified
+    default:
       throw LCDQualifiedAnimationPreparationError.qualificationRequired
     }
 
@@ -654,20 +738,33 @@ final class StudioModel: ObservableObject {
     guard !isDeviceOperationInFlight, verifiedWiredTarget == target else {
       throw LCDQualifiedAnimationPreparationError.operationUnavailable
     }
-    guard
-      case .qualified(let maximumFrameCount) =
-        AK47LCDExtendedUploadQualification.state(for: target),
-      maximumFrameCount == AK47LCDUploadAdapter.qualifiedMaximumFrameCount
-    else {
-      throw LCDQualifiedAnimationPreparationError.qualificationRequired
+    let refreshedState = AK47LCDExtendedUploadQualification.state(for: target)
+    switch purpose {
+    case .maximumBoundaryTrial:
+      guard refreshedState == .awaitingMaximumBoundaryTrial else {
+        throw LCDQualifiedAnimationPreparationError.qualificationRequired
+      }
+    case .qualified:
+      guard case .qualified(let maximumFrameCount) = refreshedState,
+        maximumFrameCount == AK47LCDUploadAdapter.qualifiedMaximumFrameCount
+      else {
+        throw LCDQualifiedAnimationPreparationError.qualificationRequired
+      }
     }
 
     let plan = try AK47LCDUploadPreflight.makeSyntheticPlan(
       target: target,
       container: container
     )
-    let summary = try AK47LCDUploadAdapter.makeQualifiedPlanSummary(plan)
+    let summary: AK47LCDQualifiedUploadPlanSummary
+    switch purpose {
+    case .maximumBoundaryTrial:
+      summary = try AK47LCDUploadAdapter.makeMaximumBoundaryTrialPlanSummary(plan)
+    case .qualified:
+      summary = try AK47LCDUploadAdapter.makeQualifiedPlanSummary(plan)
+    }
     return LCDQualifiedAnimationSnapshot(
+      purpose: purpose,
       project: immutableProject,
       plan: plan,
       summary: summary
@@ -691,11 +788,23 @@ final class StudioModel: ObservableObject {
       )
       return
     }
-    guard
-      case .qualified(let maximumFrameCount) =
-        AK47LCDExtendedUploadQualification.state(for: target),
-      maximumFrameCount == AK47LCDUploadAdapter.qualifiedMaximumFrameCount
-    else {
+    let currentState = AK47LCDExtendedUploadQualification.state(for: target)
+    let purposeIsAllowed: Bool
+    switch snapshot.purpose {
+    case .maximumBoundaryTrial:
+      purposeIsAllowed =
+        currentState == .awaitingMaximumBoundaryTrial
+        && snapshot.purpose.accepts(frameCount: plan.container.frameCount)
+    case .qualified:
+      if case .qualified(let maximumFrameCount) = currentState {
+        purposeIsAllowed =
+          maximumFrameCount == AK47LCDUploadAdapter.qualifiedMaximumFrameCount
+          && snapshot.purpose.accepts(frameCount: plan.container.frameCount)
+      } else {
+        purposeIsAllowed = false
+      }
+    }
+    guard purposeIsAllowed else {
       lcdQualifiedAnimationUploadState = .failed(
         acknowledgedPages: 0,
         LCDQualifiedAnimationPreparationError.qualificationRequired.localizedDescription
@@ -704,7 +813,6 @@ final class StudioModel: ObservableObject {
       return
     }
 
-    let authorization = AK47LCDQualifiedUploadAuthorization(explicitlyConfirming: plan)
     let totalPages = plan.container.pageCount
     lcdQualifiedAnimationVisualReviewSnapshot = nil
     lcdQualifiedAnimationUploadState = .uploading(completedPages: 0, totalPages: totalPages)
@@ -713,10 +821,7 @@ final class StudioModel: ObservableObject {
       let result = await Task.detached(priority: .userInitiated) {
         var acknowledgedPages = 0
         do {
-          try AK47LCDUploadAdapter.uploadQualifiedAnimation(
-            plan: plan,
-            authorization: authorization
-          ) { completedPages, reportedTotal in
+          let progress: (Int, Int) -> Void = { completedPages, reportedTotal in
             acknowledgedPages = completedPages
             DispatchQueue.main.async { [weak self] in
               guard let self else { return }
@@ -727,6 +832,22 @@ final class StudioModel: ObservableObject {
                 )
               }
             }
+          }
+          switch snapshot.purpose {
+          case .maximumBoundaryTrial:
+            try AK47LCDUploadAdapter.uploadMaximumBoundaryTrial(
+              plan: plan,
+              authorization: AK47LCDMaximumBoundaryUploadAuthorization(
+                explicitlyConfirming: plan
+              ),
+              progress: progress
+            )
+          case .qualified:
+            try AK47LCDUploadAdapter.uploadQualifiedAnimation(
+              plan: plan,
+              authorization: AK47LCDQualifiedUploadAuthorization(explicitlyConfirming: plan),
+              progress: progress
+            )
           }
           return (acknowledgedPages, Optional<String>.none)
         } catch {
@@ -765,24 +886,38 @@ final class StudioModel: ObservableObject {
       return false
     }
     do {
-      try AK47LCDExtendedUploadQualification.recordQualifiedUploadVisualAttestation(
-        for: target,
-        attestation: AK47LCDQualifiedUploadVisualAttestation(
-          explicitlyConfirmingContainerSHA256: digest,
-          at: Date()
-        )
+      let attestation = AK47LCDQualifiedUploadVisualAttestation(
+        explicitlyConfirmingContainerSHA256: digest,
+        at: Date()
       )
+      switch receipt.state {
+      case .awaitingMaximumBoundaryVisualAttestation:
+        try AK47LCDExtendedUploadQualification.recordMaximumBoundaryVisualAttestation(
+          for: target,
+          attestation: attestation
+        )
+      case .awaitingExtendedVisualAttestation:
+        try AK47LCDExtendedUploadQualification.recordQualifiedUploadVisualAttestation(
+          for: target,
+          attestation: attestation
+        )
+      default:
+        throw LCDQualifiedAnimationPreparationError.qualificationRequired
+      }
       lcdQualifiedAnimationVisualReviewSnapshot = nil
       lcdExtendedQualificationError = nil
     } catch {
       lcdExtendedQualificationError = error.localizedDescription
     }
     refreshLCDExtendedQualificationViewState()
-    guard
-      case .qualified(let maximumFrameCount) =
-        AK47LCDExtendedUploadQualification.snapshot.state
-    else { return false }
-    return maximumFrameCount == AK47LCDUploadAdapter.qualifiedMaximumFrameCount
+    switch AK47LCDExtendedUploadQualification.snapshot.state {
+    case .awaitingMaximumBoundaryObservedUSBDisconnection:
+      return true
+    case .qualified(let maximumFrameCount):
+      return maximumFrameCount == AK47LCDUploadAdapter.qualifiedMaximumFrameCount
+    default:
+      return false
+    }
   }
 
   @discardableResult
@@ -798,10 +933,21 @@ final class StudioModel: ObservableObject {
       return false
     }
     do {
-      try AK47LCDExtendedUploadQualification.reportQualifiedUploadVisualMismatch(
-        for: target,
-        containerSHA256: digest
-      )
+      switch receipt.state {
+      case .awaitingMaximumBoundaryVisualAttestation,
+        .maximumBoundaryVisualMismatchQuarantinePending:
+        try AK47LCDExtendedUploadQualification.reportMaximumBoundaryVisualMismatch(
+          for: target,
+          containerSHA256: digest
+        )
+      case .awaitingExtendedVisualAttestation, .extendedVisualMismatchQuarantinePending:
+        try AK47LCDExtendedUploadQualification.reportQualifiedUploadVisualMismatch(
+          for: target,
+          containerSHA256: digest
+        )
+      default:
+        throw LCDQualifiedAnimationPreparationError.qualificationRequired
+      }
       lcdQualifiedAnimationVisualReviewSnapshot = nil
       lcdExtendedQualificationError = nil
     } catch {
@@ -840,7 +986,7 @@ final class StudioModel: ObservableObject {
     )
   }
 
-  private static func extendedQualificationViewState(
+  static func extendedQualificationViewState(
     _ snapshot: AK47LCDExtendedUploadQualificationSnapshot
   ) -> LCDExtendedQualificationViewState {
     switch snapshot.state {
@@ -858,6 +1004,31 @@ final class StudioModel: ObservableObject {
       .awaitingExactReappearance
     case .awaitingUSBPowerCycleAttestation:
       .awaitingWiredPowerRemovalAttestation
+    case .awaitingMaximumBoundaryTrial:
+      .awaitingMaximumBoundaryTrial
+    case .maximumBoundaryTransferInProgress:
+      .maximumBoundaryTransferInProgress
+    case .awaitingMaximumBoundaryVisualAttestation:
+      if let digest = snapshot.pendingContainerSHA256,
+        let frameCount = snapshot.pendingFrameCount,
+        let pageCount = snapshot.pendingPageCount
+      {
+        .awaitingMaximumBoundaryVisualAttestation(
+          containerSHA256: digest,
+          frameCount: frameCount,
+          pageCount: pageCount
+        )
+      } else {
+        .blocked("The durable maximum-boundary visual-review receipt is incomplete.")
+      }
+    case .awaitingMaximumBoundaryObservedUSBDisconnection:
+      .awaitingMaximumBoundaryObservedAbsence
+    case .awaitingMaximumBoundaryExactSamePortReappearance:
+      .awaitingMaximumBoundaryExactReappearance
+    case .awaitingMaximumBoundaryUSBPowerCycleAttestation:
+      .awaitingMaximumBoundaryWiredPowerRemovalAttestation
+    case .maximumBoundaryVisualMismatchQuarantinePending:
+      .maximumBoundaryVisualMismatchQuarantinePending
     case .qualified(let maximumFrameCount):
       .qualified(maximumFrameCount: maximumFrameCount)
     case .canonicalTransferInProgress:

@@ -59,10 +59,10 @@ final class AK47LCDExtendedUploadQualificationTests: XCTestCase {
         explicitlyConfirmingUSBModeCableRemovalAt: clock.value
       )
     )
-    XCTAssertEqual(restarted.snapshot.state, .qualified(maximumFrameCount: 40))
+    XCTAssertEqual(restarted.snapshot.state, .awaitingMaximumBoundaryTrial)
     XCTAssertEqual(
       makeStore(persistence: persistence, clock: clock).snapshot.state,
-      .qualified(maximumFrameCount: 40)
+      .awaitingMaximumBoundaryTrial
     )
   }
 
@@ -102,7 +102,7 @@ final class AK47LCDExtendedUploadQualificationTests: XCTestCase {
     let clock = QualificationTestClock(Date(timeIntervalSinceReferenceDate: 3_000))
     let persistence = AK47LCDQualificationMemoryPersistence()
     let store = try qualifiedStore(persistence: persistence, clock: clock)
-    let plan = try qualifiedPlan(frameCount: 40)
+    let plan = try qualifiedPlan(frameCount: 140)
 
     let lease = try store.claimQualifiedLease(
       plan: plan,
@@ -320,7 +320,7 @@ final class AK47LCDExtendedUploadQualificationTests: XCTestCase {
       planFingerprintSHA256: AK47LCDUploadPlanFingerprint.hex(plan)
     )
     try store.finishQualifiedLease(lease, outcome: .failedBeforeSubmissionWithConfirmedCleanup)
-    XCTAssertEqual(store.snapshot.state, .qualified(maximumFrameCount: 40))
+    XCTAssertEqual(store.snapshot.state, .qualified(maximumFrameCount: 140))
 
     lease = try store.claimQualifiedLease(
       plan: plan,
@@ -336,7 +336,7 @@ final class AK47LCDExtendedUploadQualificationTests: XCTestCase {
         at: clock.value
       )
     )
-    XCTAssertEqual(store.snapshot.state, .qualified(maximumFrameCount: 40))
+    XCTAssertEqual(store.snapshot.state, .qualified(maximumFrameCount: 140))
   }
 
   func testCanonicalRunRequiresAbsentOrInvalidatedReceiptAndClaimsDurably() throws {
@@ -453,13 +453,330 @@ final class AK47LCDExtendedUploadQualificationTests: XCTestCase {
     )
   }
 
-  func testQualifiedEncoderAndSummaryUseExactFortyFrameBoundary() throws {
+  func testExpandedPolicyReplacesV1ReceiptWithFixedV2LiveLimits() {
+    XCTAssertEqual(AK47LCDQualificationRecord.schemaVersion, 2)
+    XCTAssertEqual(
+      AK47LCDExtendedUploadQualificationStateStore.policyRevision,
+      "ak47-lcd-qualified-upload-v2"
+    )
+    XCTAssertEqual(
+      AK47LCDQualificationFilePersistence.production().receiptURL.lastPathComponent,
+      "ak47-lcd-qualified-upload-v1.json"
+    )
+    XCTAssertEqual(AK47LCDUploadAdapter.qualifiedMaximumFrameCount, 140)
+    XCTAssertEqual(AK47LCDUploadAdapter.qualifiedMaximumPageCount, 2_215)
+    XCTAssertEqual(AK47LCDUploadAdapter.qualifiedMaximumContainerByteCount, 9_072_640)
+    XCTAssertEqual(AK47LCDUploadAdapter.qualifiedTransferEndAddressExclusive, 0xFE_7000)
+    XCTAssertGreaterThanOrEqual(
+      AK47LCDFormat.maximumFrameCount,
+      AK47LCDUploadAdapter.qualifiedMaximumFrameCount
+    )
+    XCTAssertGreaterThanOrEqual(
+      AK47LCDUploadPreflight.maximumPageCount,
+      AK47LCDUploadAdapter.qualifiedMaximumPageCount
+    )
+    XCTAssertGreaterThanOrEqual(
+      AK47LCDFormat.maximumContainerByteCount,
+      AK47LCDUploadAdapter.qualifiedMaximumContainerByteCount
+    )
+    XCTAssertGreaterThanOrEqual(
+      AK47LCDUploadPreflight.softwareTransferEndLimit,
+      AK47LCDUploadAdapter.qualifiedTransferEndAddressExclusive
+    )
+  }
+
+  func testExactInactiveLegacyV1QualifiedReceiptMigratesAtomicallyToBoundaryTrial() throws {
+    let clock = QualificationTestClock(Date(timeIntervalSinceReferenceDate: 7_100))
+    let persistence = AK47LCDQualificationMemoryPersistence()
+    _ = try maximumBoundaryReadyStore(persistence: persistence, clock: clock)
+    var legacy = try XCTUnwrap(persistence.load())
+    legacy.schemaVersion = 1
+    legacy.policyRevision = AK47LCDExtendedUploadQualificationStateStore.legacyPolicyRevision
+    legacy.phase = .qualified
+    try persistence.save(legacy)
+
+    XCTAssertFalse(AK47LCDExtendedUploadQualificationStateStore.isValid(legacy))
+    XCTAssertNotNil(
+      AK47LCDExtendedUploadQualificationStateStore.migratedLegacyV1Record(legacy)
+    )
+
+    let migratedStore = makeStore(persistence: persistence, clock: clock)
+    XCTAssertEqual(migratedStore.snapshot.state, .awaitingMaximumBoundaryTrial)
+    let migrated = try XCTUnwrap(persistence.load())
+    XCTAssertEqual(migrated.schemaVersion, 2)
+    XCTAssertEqual(
+      migrated.policyRevision,
+      AK47LCDExtendedUploadQualificationStateStore.policyRevision
+    )
+    XCTAssertEqual(migrated.phase, .awaitingMaximumBoundaryTrial)
+    XCTAssertEqual(migrated.target, legacy.target)
+    XCTAssertEqual(migrated.canonicalTransferStartedAt, legacy.canonicalTransferStartedAt)
+    XCTAssertEqual(migrated.canonicalTransferCompletedAt, legacy.canonicalTransferCompletedAt)
+    XCTAssertEqual(migrated.canonicalVisualAttestedAt, legacy.canonicalVisualAttestedAt)
+    XCTAssertEqual(
+      migrated.usbDisconnectionAbsenceObservedAt,
+      legacy.usbDisconnectionAbsenceObservedAt
+    )
+    XCTAssertEqual(
+      migrated.exactSamePortReappearanceObservedAt,
+      legacy.exactSamePortReappearanceObservedAt
+    )
+    XCTAssertEqual(
+      migrated.usbModeCablePowerCycleAttestedAt,
+      legacy.usbModeCablePowerCycleAttestedAt
+    )
+    XCTAssertTrue(AK47LCDExtendedUploadQualificationStateStore.isValid(migrated))
+  }
+
+  func testActualProductionV1ReceiptMigrationDryRunNeverWritesProduction() throws {
+    let productionURL = AK47LCDQualificationFilePersistence.production().receiptURL
+    guard FileManager.default.fileExists(atPath: productionURL.path) else {
+      throw XCTSkip("No local production v1 LCD qualification receipt is present.")
+    }
+    let originalData = try Data(contentsOf: productionURL, options: .mappedIfSafe)
+    let legacy = try JSONDecoder().decode(AK47LCDQualificationRecord.self, from: originalData)
+    guard legacy.schemaVersion == 1,
+      legacy.policyRevision == AK47LCDExtendedUploadQualificationStateStore.legacyPolicyRevision,
+      legacy.phase == .qualified
+    else {
+      throw XCTSkip("The local production receipt is not an eligible inactive v1 receipt.")
+    }
+    XCTAssertFalse(AK47LCDExtendedUploadQualificationStateStore.isValid(legacy))
+    XCTAssertNotNil(
+      AK47LCDExtendedUploadQualificationStateStore.migratedLegacyV1Record(legacy)
+    )
+
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "KeyCanvas-V1-Migration-DryRun-\(UUID().uuidString)",
+      isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let copiedReceiptURL = directory.appendingPathComponent(productionURL.lastPathComponent)
+    try originalData.write(to: copiedReceiptURL, options: .atomic)
+    let copiedPersistence = AK47LCDQualificationFilePersistence(receiptURL: copiedReceiptURL)
+    let clock = QualificationTestClock(Date(timeIntervalSinceReferenceDate: 7_200))
+    let store = makeStore(persistence: copiedPersistence, clock: clock)
+
+    XCTAssertEqual(store.snapshot.state, .awaitingMaximumBoundaryTrial)
+    let migrated = try XCTUnwrap(copiedPersistence.load())
+    XCTAssertEqual(migrated.schemaVersion, 2)
+    XCTAssertEqual(migrated.policyRevision, "ak47-lcd-qualified-upload-v2")
+    XCTAssertEqual(migrated.target, legacy.target)
+    XCTAssertEqual(migrated.canonicalTransferStartedAt, legacy.canonicalTransferStartedAt)
+    XCTAssertEqual(migrated.canonicalTransferCompletedAt, legacy.canonicalTransferCompletedAt)
+    XCTAssertEqual(migrated.canonicalVisualAttestedAt, legacy.canonicalVisualAttestedAt)
+    XCTAssertEqual(
+      migrated.usbModeCablePowerCycleAttestedAt,
+      legacy.usbModeCablePowerCycleAttestedAt
+    )
+    XCTAssertEqual(try Data(contentsOf: productionURL), originalData)
+  }
+
+  func testLegacyMigrationRejectsAnythingExceptExactCleanInactiveV1Qualified() throws {
+    let clock = QualificationTestClock(Date(timeIntervalSinceReferenceDate: 7_300))
+    let seedPersistence = AK47LCDQualificationMemoryPersistence()
+    _ = try maximumBoundaryReadyStore(persistence: seedPersistence, clock: clock)
+    var legacy = try XCTUnwrap(seedPersistence.load())
+    legacy.schemaVersion = 1
+    legacy.policyRevision = AK47LCDExtendedUploadQualificationStateStore.legacyPolicyRevision
+    legacy.phase = .qualified
+
+    var activeLease = legacy
+    activeLease.activeLeaseIdentifier = UUID()
+    var pendingVisual = legacy
+    pendingVisual.pendingVisualContainerSHA256 = String(repeating: "0", count: 64)
+    var boundaryEvidence = legacy
+    boundaryEvidence.maximumBoundaryFrameCount = 140
+    var wrongPhase = legacy
+    wrongPhase.phase = .extendedTransferInProgress
+    var wrongPolicy = legacy
+    wrongPolicy.policyRevision = "ak47-lcd-qualified-upload-v0"
+    var wrongSchema = legacy
+    wrongSchema.schemaVersion = 0
+
+    for malformed in [
+      activeLease,
+      pendingVisual,
+      boundaryEvidence,
+      wrongPhase,
+      wrongPolicy,
+      wrongSchema,
+    ] {
+      XCTAssertNil(
+        AK47LCDExtendedUploadQualificationStateStore.migratedLegacyV1Record(malformed)
+      )
+      let persistence = AK47LCDQualificationMemoryPersistence(record: malformed)
+      XCTAssertEqual(
+        makeStore(persistence: persistence, clock: clock).snapshot.state,
+        .persistenceUnavailable
+      )
+      XCTAssertEqual(try persistence.load(), malformed)
+    }
+  }
+
+  func testMaximumBoundaryTrialRequiresExactPlanAndAllOrderedDurableEvidence() throws {
+    let clock = QualificationTestClock(Date(timeIntervalSinceReferenceDate: 7_400))
+    let persistence = AK47LCDQualificationMemoryPersistence()
+    let store = try maximumBoundaryReadyStore(persistence: persistence, clock: clock)
+    let plan = try qualifiedPlan(frameCount: 140)
+    let digest = AK47LCDUploadDigest.sha256Hex(plan.container.data)
+    let fingerprint = AK47LCDUploadPlanFingerprint.hex(plan)
+
+    XCTAssertThrowsError(
+      try store.claimQualifiedLease(plan: plan, planFingerprintSHA256: fingerprint)
+    ) {
+      XCTAssertEqual($0 as? AK47LCDExtendedUploadQualificationError, .unavailable)
+    }
+    let canonical = try fixturePlan()
+    XCTAssertThrowsError(
+      try store.claimCanonicalTransfer(
+        plan: canonical,
+        planFingerprintSHA256: AK47LCDUploadPlanFingerprint.hex(canonical)
+      )
+    ) {
+      XCTAssertEqual($0 as? AK47LCDExtendedUploadQualificationError, .transitionNotAllowed)
+    }
+    XCTAssertThrowsError(
+      try AK47LCDUploadAdapter.makeMaximumBoundaryTrialPlanSummary(
+        qualifiedPlan(frameCount: 139)
+      )
+    ) {
+      XCTAssertEqual($0 as? AK47LCDUploadAdapterError, .maximumBoundaryTrialPlanRequired)
+    }
+
+    let summary = try AK47LCDUploadAdapter.makeMaximumBoundaryTrialPlanSummary(plan)
+    XCTAssertEqual(summary.frameCount, 140)
+    XCTAssertEqual(summary.pageCount, 2_215)
+    XCTAssertEqual(summary.containerByteCount, 9_072_640)
+    XCTAssertEqual(summary.transferEndAddressExclusive, 0xFE_7000)
+
+    let lease = try store.claimMaximumBoundaryTransfer(
+      plan: plan,
+      planFingerprintSHA256: fingerprint
+    )
+    XCTAssertEqual(store.snapshot.state, .maximumBoundaryTransferInProgress)
+    XCTAssertTrue(store.requiresDeviceOperationQuarantine)
+    let restartedDuringTransfer = makeStore(persistence: persistence, clock: clock)
+    XCTAssertEqual(restartedDuringTransfer.snapshot.state, .maximumBoundaryTransferInProgress)
+    XCTAssertFalse(
+      restartedDuringTransfer.consumeGateAdmission(
+        lease.gateAdmission,
+        for: HIDDeviceQuarantineIdentity(target: plan.target)
+      )
+    )
+    XCTAssertTrue(
+      store.consumeGateAdmission(
+        lease.gateAdmission,
+        for: HIDDeviceQuarantineIdentity(target: plan.target)
+      )
+    )
+    XCTAssertFalse(
+      store.consumeGateAdmission(
+        lease.gateAdmission,
+        for: HIDDeviceQuarantineIdentity(target: plan.target)
+      )
+    )
+
+    clock.advance()
+    try store.finishMaximumBoundaryTransfer(lease, outcome: .succeeded)
+    XCTAssertEqual(store.snapshot.state, .awaitingMaximumBoundaryVisualAttestation)
+    XCTAssertEqual(store.snapshot.pendingContainerSHA256, digest)
+    XCTAssertEqual(store.snapshot.pendingFrameCount, 140)
+    XCTAssertEqual(store.snapshot.pendingPageCount, 2_215)
+
+    XCTAssertThrowsError(
+      try store.recordMaximumBoundaryVisualAttestation(
+        for: plan.target,
+        attestation: .init(
+          explicitlyConfirmingContainerSHA256: digest,
+          at: clock.value.addingTimeInterval(-1)
+        )
+      )
+    )
+    clock.advance()
+    try store.recordMaximumBoundaryVisualAttestation(
+      for: plan.target,
+      attestation: .init(
+        explicitlyConfirmingContainerSHA256: digest,
+        at: clock.value
+      )
+    )
+    XCTAssertEqual(store.snapshot.state, .awaitingMaximumBoundaryObservedUSBDisconnection)
+
+    store.observeSuccessfulHardwareEnumeration(exactTopology(locationID: 0x9999))
+    XCTAssertEqual(store.snapshot.state, .awaitingMaximumBoundaryObservedUSBDisconnection)
+    clock.advance()
+    store.observeSuccessfulHardwareEnumeration([])
+    XCTAssertEqual(store.snapshot.state, .awaitingMaximumBoundaryExactSamePortReappearance)
+    store.observeSuccessfulHardwareEnumeration(
+      Array(exactTopology(locationID: plan.target.locationID).dropLast())
+    )
+    XCTAssertEqual(store.snapshot.state, .awaitingMaximumBoundaryExactSamePortReappearance)
+    clock.advance()
+    store.observeSuccessfulHardwareEnumeration(
+      exactTopology(locationID: plan.target.locationID)
+    )
+    XCTAssertEqual(store.snapshot.state, .awaitingMaximumBoundaryUSBPowerCycleAttestation)
+
+    XCTAssertThrowsError(
+      try store.acknowledgeMaximumBoundaryUSBModeCablePowerCycle(
+        for: plan.target,
+        attestation: .init(
+          explicitlyConfirmingUSBModeCableRemovalAt: clock.value.addingTimeInterval(-1)
+        )
+      )
+    )
+    clock.advance()
+    try store.acknowledgeMaximumBoundaryUSBModeCablePowerCycle(
+      for: plan.target,
+      attestation: .init(explicitlyConfirmingUSBModeCableRemovalAt: clock.value)
+    )
+    XCTAssertEqual(store.snapshot.state, .qualified(maximumFrameCount: 140))
+    XCTAssertEqual(
+      makeStore(persistence: persistence, clock: clock).snapshot.state,
+      .qualified(maximumFrameCount: 140)
+    )
+
+    let qualified = try XCTUnwrap(persistence.load())
+    XCTAssertEqual(qualified.schemaVersion, 2)
+    XCTAssertEqual(qualified.policyRevision, "ak47-lcd-qualified-upload-v2")
+    XCTAssertEqual(qualified.maximumBoundaryPlanFingerprintSHA256, fingerprint)
+    XCTAssertEqual(qualified.maximumBoundaryContainerSHA256, digest)
+    XCTAssertEqual(qualified.maximumBoundaryFrameCount, 140)
+    XCTAssertEqual(qualified.maximumBoundaryPageCount, 2_215)
+    XCTAssertEqual(qualified.maximumBoundaryContainerByteCount, 9_072_640)
+    XCTAssertEqual(qualified.maximumBoundaryPartitionBudgetByteCount, 9_072_640)
+    XCTAssertEqual(qualified.maximumBoundaryTransferEndAddressExclusive, 0xFE_7000)
+    XCTAssertLessThanOrEqual(
+      try XCTUnwrap(qualified.maximumBoundaryHostCompletedAt),
+      try XCTUnwrap(qualified.maximumBoundaryVisualAttestedAt)
+    )
+    XCTAssertLessThanOrEqual(
+      try XCTUnwrap(qualified.maximumBoundaryVisualAttestedAt),
+      try XCTUnwrap(qualified.maximumBoundaryUSBDisconnectionAbsenceObservedAt)
+    )
+    XCTAssertLessThanOrEqual(
+      try XCTUnwrap(qualified.maximumBoundaryUSBDisconnectionAbsenceObservedAt),
+      try XCTUnwrap(qualified.maximumBoundaryExactSamePortReappearanceObservedAt)
+    )
+    XCTAssertLessThanOrEqual(
+      try XCTUnwrap(qualified.maximumBoundaryExactSamePortReappearanceObservedAt),
+      try XCTUnwrap(qualified.maximumBoundaryUSBModeCablePowerCycleAttestedAt)
+    )
+    XCTAssertEqual(qualified.lastSuccessfulContainerSHA256, digest)
+    XCTAssertTrue(AK47LCDExtendedUploadQualificationStateStore.isValid(qualified))
+  }
+
+  func testQualifiedEncoderAndSummaryUseExactOneHundredFortyFrameBoundary() throws {
     let boundaries: [(frames: Int, pages: Int, bytes: Int, end: UInt64)] = [
       (1, 16, 65_536, 0x75_0000),
       (2, 32, 131_072, 0x76_0000),
       (3, 48, 196_608, 0x77_0000),
       (39, 618, 2_531_328, 0x9A_A000),
       (40, 633, 2_592_768, 0x9B_9000),
+      (139, 2_200, 9_011_200, 0xFD_8000),
+      (140, 2_215, 9_072_640, 0xFE_7000),
     ]
     for boundary in boundaries {
       let summary = try AK47LCDUploadAdapter.makeQualifiedPlanSummary(
@@ -472,31 +789,53 @@ final class AK47LCDExtendedUploadQualificationTests: XCTestCase {
       XCTAssertEqual(summary.transferEndAddressExclusive, boundary.end)
     }
 
-    let forty = try qualifiedPlan(frameCount: 40)
-    let summary = try AK47LCDUploadAdapter.makeQualifiedPlanSummary(forty)
-    XCTAssertEqual(summary.frameCount, 40)
-    XCTAssertEqual(summary.pageCount, 633)
-    XCTAssertEqual(summary.containerByteCount, 2_592_768)
+    let maximum = try qualifiedPlan(frameCount: 140)
+    let summary = try AK47LCDUploadAdapter.makeQualifiedPlanSummary(maximum)
+    XCTAssertEqual(summary.frameCount, 140)
+    XCTAssertEqual(summary.pageCount, 2_215)
+    XCTAssertEqual(summary.containerByteCount, 9_072_640)
     XCTAssertEqual(summary.transferStartAddress, 0x74_0000)
-    XCTAssertEqual(summary.transferEndAddressExclusive, 0x9B_9000)
+    XCTAssertEqual(summary.transferEndAddressExclusive, 0xFE_7000)
     XCTAssertEqual(summary.containerSHA256.count, 64)
 
-    let selector = AK47LCDUploadStateMachine.selectorPayload(pageCount: 633)
+    let selector = AK47LCDUploadStateMachine.selectorPayload(pageCount: 2_215)
     XCTAssertEqual(selector[0...2], [0x04, 0x72, 0x01])
-    XCTAssertEqual(selector[8], 0x79)
-    XCTAssertEqual(selector[9], 0x02)
-    XCTAssertEqual(forty.container.data[0], 0x28)
-    XCTAssertEqual(Array(forty.container.data[1...40]), [UInt8](repeating: 0x32, count: 40))
-    XCTAssertTrue(forty.container.data[41..<256].allSatisfy { $0 == 0xFF })
-    XCTAssertTrue(forty.container.data.suffix(512).allSatisfy { $0 == 0xFF })
+    XCTAssertEqual(selector[8], 0xA7)
+    XCTAssertEqual(selector[9], 0x08)
+    XCTAssertEqual(maximum.container.unpaddedByteCount, 9_072_256)
+    XCTAssertEqual(maximum.container.data[0], 0x8C)
+    XCTAssertEqual(
+      Array(maximum.container.data[1...140]),
+      [UInt8](repeating: 0x32, count: 140)
+    )
+    XCTAssertTrue(maximum.container.data[141..<256].allSatisfy { $0 == 0xFF })
+    XCTAssertTrue(maximum.container.data.suffix(384).allSatisfy { $0 == 0xFF })
   }
 
-  func testQualifiedValidationRejectsFortyOneFramesInflatedPageAndLargeBudget() throws {
-    let project41 = try project(frameCount: 41)
-    XCTAssertThrowsError(try AK47LCDUploadAdapter.encodeQualifiedAnimation(project41)) {
+  func testQualifiedValidationRejectsOutOfRangeFramesInflatedPageAndLargeBudget() throws {
+    let maximum = try qualifiedPlan(frameCount: 140)
+    let frameCount141 = AK47LCDEncodedContainer(
+      data: maximum.container.data,
+      frameCount: 141,
+      sourceDelaysMilliseconds: maximum.container.sourceDelaysMilliseconds + [100],
+      encodedDeviceDelays: maximum.container.encodedDeviceDelays + [50],
+      nominalEncodedDelaysMilliseconds: maximum.container.nominalEncodedDelaysMilliseconds + [100],
+      effectiveDeviceDelaysMilliseconds:
+        maximum.container.effectiveDeviceDelaysMilliseconds + [100],
+      firmwareMinimumAppliedFrameIndices: maximum.container.firmwareMinimumAppliedFrameIndices,
+      unpaddedByteCount: maximum.container.unpaddedByteCount,
+      pageCount: maximum.container.pageCount,
+      paddingByte: maximum.container.paddingByte,
+      partitionBudgetByteCount: maximum.container.partitionBudgetByteCount
+    )
+    XCTAssertThrowsError(
+      try AK47LCDUploadAdapter.validateQualifiedAnimation(
+        AK47LCDUploadPlan(target: maximum.target, container: frameCount141)
+      )
+    ) {
       XCTAssertEqual(
         $0 as? AK47LCDUploadAdapterError,
-        .qualifiedFrameCountNotEnabled(41)
+        .qualifiedFrameCountNotEnabled(141)
       )
     }
 
@@ -527,12 +866,26 @@ final class AK47LCDExtendedUploadQualificationTests: XCTestCase {
       )
     }
 
-    let defaultBudgetContainer = try AK47LCDContainerEncoder.encode(project: project(frameCount: 2))
-    let defaultBudgetPlan = try AK47LCDUploadPreflight.makeSyntheticPlan(
-      target: valid.target,
-      container: defaultBudgetContainer
+    let oversizedBudgetContainer = AK47LCDEncodedContainer(
+      data: valid.container.data,
+      frameCount: valid.container.frameCount,
+      sourceDelaysMilliseconds: valid.container.sourceDelaysMilliseconds,
+      encodedDeviceDelays: valid.container.encodedDeviceDelays,
+      nominalEncodedDelaysMilliseconds: valid.container.nominalEncodedDelaysMilliseconds,
+      effectiveDeviceDelaysMilliseconds: valid.container.effectiveDeviceDelaysMilliseconds,
+      firmwareMinimumAppliedFrameIndices: valid.container.firmwareMinimumAppliedFrameIndices,
+      unpaddedByteCount: valid.container.unpaddedByteCount,
+      pageCount: valid.container.pageCount,
+      paddingByte: valid.container.paddingByte,
+      partitionBudgetByteCount:
+        AK47LCDUploadAdapter.qualifiedMaximumContainerByteCount
+        + AK47LCDFormat.transferPageByteCount
     )
-    XCTAssertThrowsError(try AK47LCDUploadAdapter.makeQualifiedPlanSummary(defaultBudgetPlan)) {
+    XCTAssertThrowsError(
+      try AK47LCDUploadAdapter.validateQualifiedAnimation(
+        AK47LCDUploadPlan(target: valid.target, container: oversizedBudgetContainer)
+      )
+    ) {
       XCTAssertEqual($0 as? AK47LCDUploadError, .partitionBudgetMismatch)
     }
 
@@ -556,6 +909,203 @@ final class AK47LCDExtendedUploadQualificationTests: XCTestCase {
     XCTAssertThrowsError(try AK47LCDUploadAdapter.makeQualifiedPlanSummary(wrappedDelayPlan)) {
       XCTAssertEqual($0 as? AK47LCDUploadError, .delayMetadataMismatch)
     }
+  }
+
+  func testMaximumBoundaryAuthorizationIsExactAndOneUse() throws {
+    let plan = try qualifiedPlan(frameCount: 140)
+    let different = try qualifiedPlan(frameCount: 139)
+    let authorization = AK47LCDMaximumBoundaryUploadAuthorization(
+      explicitlyConfirming: plan
+    )
+    XCTAssertThrowsError(try authorization.consume(for: different)) {
+      XCTAssertEqual($0 as? AK47LCDUploadAdapterError, .authorizationMismatch)
+    }
+    try authorization.consume(for: plan)
+    XCTAssertThrowsError(try authorization.consume(for: plan)) {
+      XCTAssertEqual($0 as? AK47LCDUploadAdapterError, .authorizationAlreadyConsumed)
+    }
+  }
+
+  func testMaximumBoundaryAdapterTransfersExactlyTwoThousandTwoHundredFifteenPages()
+    throws
+  {
+    let clock = QualificationTestClock(Date(timeIntervalSinceReferenceDate: 7_600))
+    let persistence = AK47LCDQualificationMemoryPersistence()
+    let store = try maximumBoundaryReadyStore(persistence: persistence, clock: clock)
+    let plan = try qualifiedPlan(frameCount: 140)
+    let driver = QualificationMockDriver(mode: .success)
+    var progress: [(Int, Int)] = []
+
+    try AK47LCDUploadAdapter.performMaximumBoundaryTrial(
+      plan: plan,
+      authorization: AK47LCDMaximumBoundaryUploadAuthorization(
+        explicitlyConfirming: plan
+      ),
+      qualification: store,
+      driver: driver,
+      gate: QualificationMockGate(),
+      activityProvider: QualificationMockActivityProvider(),
+      sleep: { _ in },
+      progress: { progress.append(($0, $1)) }
+    )
+
+    XCTAssertEqual(store.snapshot.state, .awaitingMaximumBoundaryVisualAttestation)
+    XCTAssertEqual(driver.session?.featureCommands, [0x18, 0x72, 0x02])
+    XCTAssertEqual(driver.session?.outputCount, 2_215)
+    XCTAssertEqual(driver.session?.acknowledgementCount, 2_215)
+    XCTAssertEqual(driver.session?.outputCountAtCommit, 2_215)
+    XCTAssertEqual(progress.map(\.0), Array(1...2_215))
+    XCTAssertEqual(progress.map(\.1), Array(repeating: 2_215, count: 2_215))
+    let record = try XCTUnwrap(persistence.load())
+    XCTAssertEqual(record.maximumBoundaryFrameCount, 140)
+    XCTAssertEqual(record.maximumBoundaryPageCount, 2_215)
+    XCTAssertEqual(record.maximumBoundaryContainerByteCount, 9_072_640)
+    XCTAssertEqual(record.maximumBoundaryTransferEndAddressExclusive, 0xFE_7000)
+  }
+
+  func testMaximumBoundaryPreSubmissionFailureRestoresOneUseTrial() throws {
+    let clock = QualificationTestClock(Date(timeIntervalSinceReferenceDate: 7_700))
+    let store = try maximumBoundaryReadyStore(clock: clock)
+    let plan = try qualifiedPlan(frameCount: 140)
+    let driver = QualificationMockDriver(mode: .success)
+    let gate = QualificationMockGate(forcedAcquireResult: .busy)
+
+    XCTAssertThrowsError(
+      try AK47LCDUploadAdapter.performMaximumBoundaryTrial(
+        plan: plan,
+        authorization: AK47LCDMaximumBoundaryUploadAuthorization(
+          explicitlyConfirming: plan
+        ),
+        qualification: store,
+        driver: driver,
+        gate: gate,
+        activityProvider: QualificationMockActivityProvider(),
+        sleep: { _ in }
+      )
+    ) {
+      XCTAssertEqual($0 as? AK47LCDUploadAdapterError, .deviceBusy)
+    }
+    XCTAssertEqual(store.snapshot.state, .awaitingMaximumBoundaryTrial)
+    XCTAssertEqual(driver.makeSessionCount, 0)
+    XCTAssertEqual(gate.acquireCount, 1)
+  }
+
+  func testMaximumBoundarySubmittedFailuresInvalidateAndGloballyQuarantine() throws {
+    let clock = QualificationTestClock(Date(timeIntervalSinceReferenceDate: 7_800))
+    let plan = try qualifiedPlan(frameCount: 140)
+
+    for failingPage in [0, 1_107, 2_214] {
+      let quarantine = QualificationQuarantineRecorder()
+      let store = try maximumBoundaryReadyStore(
+        clock: clock,
+        quarantineTarget: { try quarantine.quarantine($0) }
+      )
+      let driver = QualificationMockDriver(mode: .failOutput(failingPage))
+      var progress: [(Int, Int)] = []
+      XCTAssertThrowsError(
+        try AK47LCDUploadAdapter.performMaximumBoundaryTrial(
+          plan: plan,
+          authorization: AK47LCDMaximumBoundaryUploadAuthorization(
+            explicitlyConfirming: plan
+          ),
+          qualification: store,
+          driver: driver,
+          gate: QualificationMockGate(),
+          activityProvider: QualificationMockActivityProvider(),
+          sleep: { _ in },
+          progress: { progress.append(($0, $1)) }
+        )
+      ) {
+        guard case .partialTransactionQuarantined = $0 as? AK47LCDUploadAdapterError else {
+          return XCTFail("unexpected error: \($0)")
+        }
+      }
+      XCTAssertEqual(driver.session?.featureCommands, [0x18, 0x72])
+      XCTAssertEqual(driver.session?.outputCount, failingPage)
+      XCTAssertEqual(driver.session?.acknowledgementCount, failingPage)
+      XCTAssertEqual(progress.count, failingPage)
+      XCTAssertEqual(store.snapshot.state, .invalidatedRequiresFreshDiagnostic)
+      XCTAssertEqual(
+        quarantine.targets,
+        [HIDDeviceQuarantineIdentity(target: plan.target)]
+      )
+    }
+  }
+
+  func testInterruptedMaximumBoundaryLeaseRequiresQuarantineReconciliation() throws {
+    let clock = QualificationTestClock(Date(timeIntervalSinceReferenceDate: 7_900))
+    let persistence = AK47LCDQualificationMemoryPersistence()
+    let original = try maximumBoundaryReadyStore(persistence: persistence, clock: clock)
+    let plan = try qualifiedPlan(frameCount: 140)
+    let lease = try original.claimMaximumBoundaryTransfer(
+      plan: plan,
+      planFingerprintSHA256: AK47LCDUploadPlanFingerprint.hex(plan)
+    )
+    let quarantine = QualificationQuarantineRecorder()
+    let restarted = makeStore(
+      persistence: persistence,
+      clock: clock,
+      quarantineTarget: { try quarantine.quarantine($0) }
+    )
+    XCTAssertEqual(restarted.snapshot.state, .maximumBoundaryTransferInProgress)
+
+    try restarted.reconcileInterruptedTransfer(for: plan.target)
+    XCTAssertEqual(restarted.snapshot.state, .invalidatedRequiresFreshDiagnostic)
+    XCTAssertEqual(quarantine.targets, [HIDDeviceQuarantineIdentity(target: plan.target)])
+    XCTAssertThrowsError(
+      try original.finishMaximumBoundaryTransfer(
+        lease,
+        outcome: .failedBeforeSubmissionWithConfirmedCleanup
+      )
+    )
+  }
+
+  func testMaximumBoundaryVisualMismatchIsDurableAndQuarantined() throws {
+    let clock = QualificationTestClock(Date(timeIntervalSinceReferenceDate: 7_950))
+    let persistence = AK47LCDQualificationMemoryPersistence()
+    let initial = try maximumBoundaryReadyStore(persistence: persistence, clock: clock)
+    let plan = try qualifiedPlan(frameCount: 140)
+    let digest = AK47LCDUploadDigest.sha256Hex(plan.container.data)
+    let lease = try initial.claimMaximumBoundaryTransfer(
+      plan: plan,
+      planFingerprintSHA256: AK47LCDUploadPlanFingerprint.hex(plan)
+    )
+    clock.advance()
+    try initial.finishMaximumBoundaryTransfer(lease, outcome: .succeeded)
+
+    let quarantine = QualificationQuarantineRecorder()
+    quarantine.shouldFail = true
+    let restarted = makeStore(
+      persistence: persistence,
+      clock: clock,
+      quarantineTarget: { try quarantine.quarantine($0) }
+    )
+    XCTAssertThrowsError(
+      try restarted.reportMaximumBoundaryVisualMismatch(
+        for: plan.target,
+        containerSHA256: digest
+      )
+    )
+    XCTAssertEqual(
+      restarted.snapshot.state,
+      .maximumBoundaryVisualMismatchQuarantinePending
+    )
+    XCTAssertEqual(
+      makeStore(
+        persistence: persistence,
+        clock: clock,
+        quarantineTarget: { try quarantine.quarantine($0) }
+      ).snapshot.state,
+      .maximumBoundaryVisualMismatchQuarantinePending
+    )
+
+    quarantine.shouldFail = false
+    try restarted.reportMaximumBoundaryVisualMismatch(
+      for: plan.target,
+      containerSHA256: digest
+    )
+    XCTAssertEqual(restarted.snapshot.state, .invalidatedRequiresFreshDiagnostic)
+    XCTAssertEqual(quarantine.targets, [HIDDeviceQuarantineIdentity(target: plan.target)])
   }
 
   func testMissingReceiptRejectsBeforeGateActivityOrDriver() throws {
@@ -731,14 +1281,14 @@ final class AK47LCDExtendedUploadQualificationTests: XCTestCase {
         sleep: { _ in }
       )
     )
-    XCTAssertEqual(qualifiedStore.snapshot.state, .qualified(maximumFrameCount: 40))
+    XCTAssertEqual(qualifiedStore.snapshot.state, .qualified(maximumFrameCount: 140))
   }
 
   func testQualifiedAdapterSuccessUsesSharedPathAndSubmittedFailureRevokesLease() throws {
     let clock = QualificationTestClock(Date(timeIntervalSinceReferenceDate: 8_000))
     let successPersistence = AK47LCDQualificationMemoryPersistence()
     let successStore = try qualifiedStore(persistence: successPersistence, clock: clock)
-    let plan = try qualifiedPlan(frameCount: 40)
+    let plan = try qualifiedPlan(frameCount: 140)
     let successDriver = QualificationMockDriver(mode: .success)
     var progress: [(Int, Int)] = []
 
@@ -758,11 +1308,11 @@ final class AK47LCDExtendedUploadQualificationTests: XCTestCase {
       AK47LCDUploadDigest.sha256Hex(plan.container.data)
     )
     XCTAssertEqual(successDriver.session?.outputCount, plan.container.pageCount)
-    XCTAssertEqual(successDriver.session?.acknowledgementCount, 633)
-    XCTAssertEqual(successDriver.session?.outputCountAtCommit, 633)
+    XCTAssertEqual(successDriver.session?.acknowledgementCount, 2_215)
+    XCTAssertEqual(successDriver.session?.outputCountAtCommit, 2_215)
     XCTAssertEqual(successDriver.session?.featureCommands, [0x18, 0x72, 0x02])
-    XCTAssertEqual(progress.map(\.0), Array(1...633))
-    XCTAssertEqual(progress.map(\.1), Array(repeating: 633, count: 633))
+    XCTAssertEqual(progress.map(\.0), Array(1...2_215))
+    XCTAssertEqual(progress.map(\.1), Array(repeating: 2_215, count: 2_215))
     let pendingReload = makeStore(persistence: successPersistence, clock: clock)
     XCTAssertEqual(pendingReload.snapshot.state, .awaitingExtendedVisualAttestation)
     try pendingReload.recordQualifiedUploadVisualAttestation(
@@ -772,7 +1322,7 @@ final class AK47LCDExtendedUploadQualificationTests: XCTestCase {
         at: clock.value
       )
     )
-    XCTAssertEqual(pendingReload.snapshot.state, .qualified(maximumFrameCount: 40))
+    XCTAssertEqual(pendingReload.snapshot.state, .qualified(maximumFrameCount: 140))
 
     let failedStore = try qualifiedStore(clock: clock)
     XCTAssertThrowsError(
@@ -795,8 +1345,8 @@ final class AK47LCDExtendedUploadQualificationTests: XCTestCase {
 
   func testQualifiedMiddleAndLastPageFailureNeverRetryOrCommitAndInvalidate() throws {
     let clock = QualificationTestClock(Date(timeIntervalSinceReferenceDate: 8_500))
-    let plan = try qualifiedPlan(frameCount: 40)
-    for failingPage in [316, 632] {
+    let plan = try qualifiedPlan(frameCount: 140)
+    for failingPage in [1_107, 2_214] {
       let store = try qualifiedStore(clock: clock)
       let driver = QualificationMockDriver(mode: .failOutput(failingPage))
       var progress: [(Int, Int)] = []
@@ -1046,7 +1596,44 @@ final class AK47LCDExtendedUploadQualificationTests: XCTestCase {
     persistence: AK47LCDQualificationMemoryPersistence = .init(),
     clock: QualificationTestClock
   ) throws -> AK47LCDExtendedUploadQualificationStateStore {
-    let store = makeStore(persistence: persistence, clock: clock)
+    let store = try maximumBoundaryReadyStore(persistence: persistence, clock: clock)
+    let plan = try qualifiedPlan(frameCount: 140)
+    let lease = try store.claimMaximumBoundaryTransfer(
+      plan: plan,
+      planFingerprintSHA256: AK47LCDUploadPlanFingerprint.hex(plan)
+    )
+    clock.advance()
+    try store.finishMaximumBoundaryTransfer(lease, outcome: .succeeded)
+    clock.advance()
+    try store.recordMaximumBoundaryVisualAttestation(
+      for: plan.target,
+      attestation: .init(
+        explicitlyConfirmingContainerSHA256: AK47LCDUploadDigest.sha256Hex(plan.container.data),
+        at: clock.value
+      )
+    )
+    clock.advance()
+    store.observeSuccessfulHardwareEnumeration([])
+    clock.advance()
+    store.observeSuccessfulHardwareEnumeration(exactTopology(locationID: plan.target.locationID))
+    clock.advance()
+    try store.acknowledgeMaximumBoundaryUSBModeCablePowerCycle(
+      for: plan.target,
+      attestation: .init(explicitlyConfirmingUSBModeCableRemovalAt: clock.value)
+    )
+    return store
+  }
+
+  private func maximumBoundaryReadyStore(
+    persistence: AK47LCDQualificationMemoryPersistence = .init(),
+    clock: QualificationTestClock,
+    quarantineTarget: @escaping @Sendable (HIDDeviceQuarantineIdentity) throws -> Void = { _ in }
+  ) throws -> AK47LCDExtendedUploadQualificationStateStore {
+    let store = makeStore(
+      persistence: persistence,
+      clock: clock,
+      quarantineTarget: quarantineTarget
+    )
     let plan = try fixturePlan()
     try recordCanonicalSuccess(store: store, plan: plan)
     clock.advance()
@@ -1063,6 +1650,7 @@ final class AK47LCDExtendedUploadQualificationTests: XCTestCase {
       for: plan.target,
       attestation: .init(explicitlyConfirmingUSBModeCableRemovalAt: clock.value)
     )
+    XCTAssertEqual(store.snapshot.state, .awaitingMaximumBoundaryTrial)
     return store
   }
 

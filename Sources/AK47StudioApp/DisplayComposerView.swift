@@ -60,8 +60,8 @@ struct DisplayComposerView: View {
           eyebrow: studioText("240 × 135 시안", "240 × 135 study", language: language),
           title: studioText("디스플레이", "Display", language: language),
           detail: studioText(
-            "이미지·GIF·로컬 영상을 불러와 실제 240×135 화면에서 바로 편집합니다. 장치 적용은 검증된 자격과 별도 exact-plan 확인을 계속 요구합니다.",
-            "Import images, GIFs, or local videos and edit them directly on the actual 240×135 canvas. Device Apply still requires verified qualification and separate exact-plan confirmation.",
+            "이미지·GIF·로컬 영상을 불러와 실제 240×135 화면에서 편집합니다. 장치 적용 상태와 다음 단계는 아래에서 확인하세요.",
+            "Import images, GIFs, or local videos and edit them on the actual 240×135 canvas. Check device Apply status and the next step below.",
             language: language
           )
         )
@@ -340,7 +340,7 @@ struct DisplayComposerView: View {
     } label: {
       Label(
         studioText(
-          "장치 실험·자격·복구", "Device experiments, qualification & recovery", language: language),
+          "장치 적용 준비·복구", "Device Apply readiness & recovery", language: language),
         systemImage: "wrench.and.screwdriver"
       )
       .font(.headline)
@@ -805,8 +805,8 @@ struct DisplayComposerView: View {
       Divider()
       Label(
         studioText(
-          "이미지와 GIF/RGB565 내보내기는 로컬 전용이며 자동 전송되지 않습니다. 자격이 검증된 뒤에도 editor의 현재 불변 snapshot만 별도 exact-plan 확인으로 적용합니다.",
-          "Image and GIF/RGB565 exports remain local and are never uploaded automatically. Even after qualification, only the editor's current immutable snapshot can be applied through a separate exact-plan confirmation.",
+          "이미지와 GIF/RGB565 내보내기는 파일만 만들며 장치로 전송하지 않습니다.",
+          "Image and GIF/RGB565 export creates local files only and does not send them to the device.",
           language: language
         ),
         systemImage: "lock.shield"

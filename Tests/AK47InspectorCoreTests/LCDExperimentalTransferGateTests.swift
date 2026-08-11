@@ -1,5 +1,6 @@
 import XCTest
 
+@testable import AK47InspectorCore
 @testable import AK47StudioApp
 
 final class LCDExperimentalTransferGateTests: XCTestCase {
@@ -58,7 +59,86 @@ final class LCDExperimentalTransferGateTests: XCTestCase {
       ))
   }
 
-  func testSessionGateCannotRecordSuccessRecoveryOrFortyFrameAuthorization() {
+  func testMaximumBoundaryPurposeAcceptsExactlyOneHundredFortyFrames() {
+    XCTAssertFalse(
+      LCDQualifiedAnimationUploadPurpose.maximumBoundaryTrial.accepts(frameCount: 1)
+    )
+    XCTAssertFalse(
+      LCDQualifiedAnimationUploadPurpose.maximumBoundaryTrial.accepts(frameCount: 40)
+    )
+    XCTAssertFalse(
+      LCDQualifiedAnimationUploadPurpose.maximumBoundaryTrial.accepts(frameCount: 139)
+    )
+    XCTAssertTrue(
+      LCDQualifiedAnimationUploadPurpose.maximumBoundaryTrial.accepts(frameCount: 140)
+    )
+    XCTAssertFalse(
+      LCDQualifiedAnimationUploadPurpose.maximumBoundaryTrial.accepts(frameCount: 141)
+    )
+  }
+
+  func testFinalQualifiedPurposeAcceptsOneThroughOneHundredFortyFrames() {
+    XCTAssertFalse(LCDQualifiedAnimationUploadPurpose.qualified.accepts(frameCount: 0))
+    XCTAssertTrue(LCDQualifiedAnimationUploadPurpose.qualified.accepts(frameCount: 1))
+    XCTAssertTrue(LCDQualifiedAnimationUploadPurpose.qualified.accepts(frameCount: 40))
+    XCTAssertTrue(LCDQualifiedAnimationUploadPurpose.qualified.accepts(frameCount: 140))
+    XCTAssertFalse(LCDQualifiedAnimationUploadPurpose.qualified.accepts(frameCount: 141))
+  }
+
+  @MainActor
+  func testMaximumBoundaryReceiptProjectionKeepsGeneralApplyLockedUntilFinalPowerEvidence() {
+    let waiting = StudioModel.extendedQualificationViewState(
+      AK47LCDExtendedUploadQualificationSnapshot(
+        target: nil,
+        state: .awaitingMaximumBoundaryTrial
+      )
+    )
+    XCTAssertEqual(waiting, .awaitingMaximumBoundaryTrial)
+    XCTAssertTrue(waiting.permitsMaximumBoundaryTrial)
+    XCTAssertFalse(waiting.permitsExtendedUpload)
+
+    let visual = StudioModel.extendedQualificationViewState(
+      AK47LCDExtendedUploadQualificationSnapshot(
+        target: nil,
+        state: .awaitingMaximumBoundaryVisualAttestation,
+        pendingContainerSHA256: String(repeating: "c", count: 64),
+        pendingFrameCount: 140,
+        pendingPageCount: 2_215
+      )
+    )
+    XCTAssertEqual(
+      visual,
+      .awaitingMaximumBoundaryVisualAttestation(
+        containerSHA256: String(repeating: "c", count: 64),
+        frameCount: 140,
+        pageCount: 2_215
+      )
+    )
+    XCTAssertFalse(visual.permitsExtendedUpload)
+
+    for state in [
+      AK47LCDExtendedUploadQualificationState
+        .awaitingMaximumBoundaryObservedUSBDisconnection,
+      .awaitingMaximumBoundaryExactSamePortReappearance,
+      .awaitingMaximumBoundaryUSBPowerCycleAttestation,
+    ] {
+      XCTAssertFalse(
+        StudioModel.extendedQualificationViewState(
+          AK47LCDExtendedUploadQualificationSnapshot(target: nil, state: state)
+        ).permitsExtendedUpload
+      )
+    }
+
+    let qualified = StudioModel.extendedQualificationViewState(
+      AK47LCDExtendedUploadQualificationSnapshot(
+        target: nil,
+        state: .qualified(maximumFrameCount: 140)
+      )
+    )
+    XCTAssertTrue(qualified.permitsExtendedUpload)
+  }
+
+  func testSessionGateCannotRecordSuccessRecoveryOrMaximumFrameAuthorization() {
     let source = try! String(
       contentsOf:
         projectRoot
@@ -73,7 +153,7 @@ final class LCDExperimentalTransferGateTests: XCTestCase {
     XCTAssertFalse(source.contains("empiricalExtendedFrameLimit"))
   }
 
-  func testReadOnlyReceiptProjectionPermitsOnlyExactFortyFrameQualification() {
+  func testReadOnlyReceiptProjectionPermitsOnlyFinalOneHundredFortyFrameQualification() {
     XCTAssertFalse(LCDExtendedQualificationViewState.receiptUnavailable.permitsExtendedUpload)
     XCTAssertFalse(
       LCDExtendedQualificationViewState.awaitingVisualAttestation.permitsExtendedUpload)
@@ -83,6 +163,34 @@ final class LCDExperimentalTransferGateTests: XCTestCase {
       LCDExtendedQualificationViewState.awaitingExactReappearance.permitsExtendedUpload)
     XCTAssertFalse(
       LCDExtendedQualificationViewState.awaitingWiredPowerRemovalAttestation
+        .permitsExtendedUpload)
+    XCTAssertFalse(
+      LCDExtendedQualificationViewState.awaitingMaximumBoundaryTrial
+        .permitsExtendedUpload)
+    XCTAssertTrue(
+      LCDExtendedQualificationViewState.awaitingMaximumBoundaryTrial
+        .permitsMaximumBoundaryTrial)
+    XCTAssertFalse(
+      LCDExtendedQualificationViewState.maximumBoundaryTransferInProgress
+        .permitsExtendedUpload)
+    XCTAssertFalse(
+      LCDExtendedQualificationViewState.awaitingMaximumBoundaryVisualAttestation(
+        containerSHA256: String(repeating: "b", count: 64),
+        frameCount: 140,
+        pageCount: 2_215
+      ).permitsExtendedUpload
+    )
+    XCTAssertFalse(
+      LCDExtendedQualificationViewState.awaitingMaximumBoundaryObservedAbsence
+        .permitsExtendedUpload)
+    XCTAssertFalse(
+      LCDExtendedQualificationViewState.awaitingMaximumBoundaryExactReappearance
+        .permitsExtendedUpload)
+    XCTAssertFalse(
+      LCDExtendedQualificationViewState.awaitingMaximumBoundaryWiredPowerRemovalAttestation
+        .permitsExtendedUpload)
+    XCTAssertFalse(
+      LCDExtendedQualificationViewState.maximumBoundaryVisualMismatchQuarantinePending
         .permitsExtendedUpload)
     XCTAssertFalse(
       LCDExtendedQualificationViewState.canonicalTransferInProgress
@@ -112,12 +220,32 @@ final class LCDExperimentalTransferGateTests: XCTestCase {
     XCTAssertFalse(
       LCDExtendedQualificationViewState.qualified(maximumFrameCount: 39)
         .permitsExtendedUpload)
-    XCTAssertTrue(
+    XCTAssertFalse(
       LCDExtendedQualificationViewState.qualified(maximumFrameCount: 40)
+        .permitsExtendedUpload)
+    XCTAssertTrue(
+      LCDExtendedQualificationViewState.qualified(maximumFrameCount: 140)
         .permitsExtendedUpload)
     XCTAssertFalse(
       LCDExtendedQualificationViewState.blocked("receipt read failed")
         .permitsExtendedUpload)
+  }
+
+  func testDetailedQualificationStepsStartCollapsedAndHideWhenQualified() {
+    XCTAssertFalse(LCDExtendedQualificationDetailsPresentation.initiallyExpanded)
+    XCTAssertTrue(
+      LCDExtendedQualificationDetailsPresentation.isAvailable(for: .receiptUnavailable)
+    )
+    XCTAssertTrue(
+      LCDExtendedQualificationDetailsPresentation.isAvailable(
+        for: .awaitingMaximumBoundaryTrial
+      )
+    )
+    XCTAssertFalse(
+      LCDExtendedQualificationDetailsPresentation.isAvailable(
+        for: .qualified(maximumFrameCount: 140)
+      )
+    )
   }
 
   private func fullyAcknowledgedGate() -> LCDExperimentalTransferGate {

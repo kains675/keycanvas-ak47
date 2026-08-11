@@ -144,16 +144,28 @@ and has SHA-256
 The bootstrap adapter must reject every other image, hash, frame count, page
 count and payload.
 
-A separate qualified path accepts only an immutable, currently edited 1...40-
-frame project value after Core validates a durable, target-bound receipt. That
-receipt must begin with a fresh canonical transfer under the receipt-enabled
-build, a separate visible-corner attestation, observed USB disconnection,
-exact same-location/four-collection reappearance, and an explicit statement
-that the selector stayed in USB mode while cable removal visibly unpowered the
-LCD, LEDs and device. Earlier trials cannot be imported or backfilled. A final
-one-use authorization binds the exact target, encoded SHA-256, frame/page/byte
-counts and address range shown by the UI. This remains a typed project-content
-path, not a raw-payload API.
+Policy v2 keeps the general qualified path locked after the canonical receipt.
+It first accepts only an immutable, currently edited, exact 140-frame/2,215-page
+boundary value. The receipt must begin with a fresh canonical transfer under the
+receipt-enabled build, a separate visible-corner attestation, observed USB
+disconnection, exact same-location/four-collection reappearance, and an explicit
+statement that cable removal visibly unpowered the LCD, LEDs and device. A
+validated exact v1 qualified receipt may migrate only that canonical and ordered
+recovery provenance into policy v2's boundary-waiting state; it cannot migrate
+140-frame success authority. Earlier evidence-only trials cannot be imported or
+backfilled. A one-use authorization binds the exact target, encoded SHA-256,
+frame/page/byte counts and address range shown by the UI. This remains a typed
+project-content path, not a raw-payload API.
+
+Boundary host completion is not qualification. The user must compare the actual
+LCD against the exact submitted RGB565 preview, then repeat USB-mode cable
+removal, real absence, same-port exact-four reappearance and the unpowered
+attestation. Only that full sequence unlocks ordinary immutable 1...140-frame
+plans for the exact target. The production KeyCanvas trial completed this full
+sequence: 2,215 expected input sequences, commit and exact postflight passed;
+full playback, loop, color and frame order matched; cable removal produced real
+absence; same-port reconnection produced exactly four collections; and the
+animation persisted. Its policy-v2 receipt is qualified for 140 frames.
 
 The repository also contains a pure, non-executable dry-run risk model for
 three categories: function settings, per-key RGB and onboard lighting. It
@@ -235,15 +247,18 @@ numeric `0x03`/`0x84` endpoints. Each of 16 completed Output calls must elicit
 the expected input-report sequence, followed by exact postflight; this must not
 be described as a direct macOS endpoint capture or as page/flash acceptance.
 
-The 140-frame/2,215-page limit remains an offline host-format ceiling, not a
-proven physical boundary or live allowance. The qualified live maximum is 40
-frames and stays unreachable until the fresh ordered receipt above is complete;
-the production store starts empty and persistence failure is fail-closed. A
-qualified host sequence finishes in a durable visual-review-pending state. The
-user must compare the retained immutable expected animation with the actual LCD:
-an exact-match attestation reopens qualification, while a wrong or unverifiable
-result revokes it and arms durable quarantine. Relaunching without the expected
-preview cannot create a positive attestation.
+The 140-frame/2,215-page host-format ceiling is not a proven physical boundary.
+Policy v2 exposes it only through the exact boundary trial above; a completed
+host sequence alone never creates live allowance. The production store is
+fail-closed. Boundary and later qualified host sequences finish in a durable
+visual-review-pending state. The user must compare the retained immutable
+expected animation with the actual LCD. Wrong or unverifiable output revokes
+authority and arms durable quarantine. Relaunching without the expected preview
+cannot create a positive attestation.
+
+The successful production KeyCanvas result is distinct from the separate
+authorized-private Windows observations. Neither result provides LCD readback,
+an ACK-carried page index, physical-partition proof or rollback.
 
 A canonical or qualified transfer lease that survives interruption is never
 cleared or restored to success. While no other transfer process is active, the
@@ -252,9 +267,10 @@ interrupted-quarantine-pending phase, then retries the shared durable marker and
 ends with invalidated qualification. The pending phase is idempotent across
 relaunch, blocks other device operations and exposes no manual clear.
 
-No executable path may expose arbitrary raw payloads, exceed the qualified
-40-frame boundary, seize an interface, write keymaps or macros, or read, update,
-extract, flash or distribute firmware or bootloader state. Raw report bytes must
+No executable path may expose arbitrary raw payloads, send 41...139 frames before
+final policy-v2 qualification, exceed 140 frames, seize an interface, write
+keymaps or macros, or read, update, extract, flash or distribute firmware or
+bootloader state. Raw report bytes must
 not be persisted or logged. Any broader LCD selector, readback or write requires
 a separate design and safety review, default-off behavior, unambiguous user
 action, an auditable typed interface and synthetic boundary tests.

@@ -62,6 +62,17 @@ enum LCDExtendedQualificationViewState: Equatable {
   case awaitingObservedAbsence
   case awaitingExactReappearance
   case awaitingWiredPowerRemovalAttestation
+  case awaitingMaximumBoundaryTrial
+  case maximumBoundaryTransferInProgress
+  case awaitingMaximumBoundaryVisualAttestation(
+    containerSHA256: String,
+    frameCount: Int,
+    pageCount: Int
+  )
+  case awaitingMaximumBoundaryObservedAbsence
+  case awaitingMaximumBoundaryExactReappearance
+  case awaitingMaximumBoundaryWiredPowerRemovalAttestation
+  case maximumBoundaryVisualMismatchQuarantinePending
   case qualified(maximumFrameCount: Int)
   case canonicalTransferInProgress
   case canonicalVisualMismatchQuarantinePending
@@ -78,7 +89,20 @@ enum LCDExtendedQualificationViewState: Equatable {
 
   var permitsExtendedUpload: Bool {
     guard case .qualified(let maximumFrameCount) = self else { return false }
-    return maximumFrameCount == 40
+    return maximumFrameCount == AK47LCDUploadAdapter.qualifiedMaximumFrameCount
+  }
+
+  var permitsMaximumBoundaryTrial: Bool {
+    self == .awaitingMaximumBoundaryTrial
+  }
+}
+
+enum LCDExtendedQualificationDetailsPresentation {
+  static let initiallyExpanded = false
+
+  static func isAvailable(for state: LCDExtendedQualificationViewState) -> Bool {
+    if case .qualified = state { return false }
+    return true
   }
 }
 
@@ -100,12 +124,12 @@ struct LCDExperimentalTransferCard: View {
     VStack(alignment: .leading, spacing: 16) {
       HStack(alignment: .top, spacing: 14) {
         VStack(alignment: .leading, spacing: 4) {
-          Text(studioText("LCD 실기 전송", "Live LCD experiment", language: language))
+          Text(studioText("1프레임 화면 시험", "One-frame display test", language: language))
             .font(.headline)
           Text(
             studioText(
-              "고정된 모서리 4색 진단 화면 한 장만 사용하는 최초 시험입니다.",
-              "The first experiment uses only one fixed four-corner diagnostic frame.",
+              "먼저 모서리 4색 화면 한 장을 전송해 장치 적용을 확인합니다.",
+              "First, send one four-corner color frame to check device Apply.",
               language: language
             )
           )
@@ -187,7 +211,7 @@ struct LCDExperimentalTransferCard: View {
           onBeginOneFrameUpload()
         } label: {
           Label(
-            studioText("1프레임 실기 적용", "Apply one-frame experiment", language: language),
+            studioText("1프레임 시험 시작", "Start one-frame test", language: language),
             systemImage: "display.and.arrow.down"
           )
         }
@@ -204,8 +228,8 @@ struct LCDExperimentalTransferCard: View {
 
       Label(
         studioText(
-          "1…40프레임 editor Apply는 Core의 fresh 영속 성공 receipt와 순서가 검증된 USB 전원 제거 복구 receipt가 모두 기록되기 전까지 제공되지 않습니다.",
-          "The 1...40-frame editor Apply path is not offered until Core holds both a fresh durable success receipt and an ordered, verified wired-power-removal recovery receipt.",
+          "전송 후 실제 LCD의 네 모서리를 확인하고 아래 복구 단계를 계속하세요.",
+          "After transfer, check the four LCD corners and continue with the recovery steps below.",
           language: language
         ),
         systemImage: "lock"
@@ -225,9 +249,9 @@ struct LCDExperimentalTransferCard: View {
       VStack(alignment: .leading, spacing: 6) {
         ProgressView(value: Double(completedPages), total: Double(totalPages))
         Text(
-          studioText(
-            "예상 input 확인 \(completedPages) / \(totalPages) · 전송 중에는 앱을 종료하거나 Mac을 잠자기 상태로 두지 마세요.",
-            "Expected inputs \(completedPages) / \(totalPages) · do not quit the app or put the Mac to sleep during transfer.",
+          LCDUploadProgressPresentation.text(
+            completedAcknowledgements: completedPages,
+            totalAcknowledgements: totalPages,
             language: language
           )
         )
@@ -237,8 +261,8 @@ struct LCDExperimentalTransferCard: View {
     case .succeeded(let acknowledgedPages, _):
       Label(
         studioText(
-          "호스트 sequence 완료 · 예상 input \(acknowledgedPages) / 16. LCD의 네 모서리 색과 방향을 직접 확인해 주세요.",
-          "Host sequence completed · expected inputs \(acknowledgedPages) / 16. Visually verify all four LCD corner colors and orientation.",
+          "이미지 전송 완료(ACK \(acknowledgedPages)/16). LCD의 네 모서리 색과 방향을 확인하세요.",
+          "Image transfer complete (ACK \(acknowledgedPages)/16). Check all four LCD corner colors and orientation.",
           language: language
         ),
         systemImage: "checkmark.seal"
@@ -283,9 +307,13 @@ struct LCDExperimentalTransferCard: View {
 
   private var availabilityLabel: String {
     if case .uploading(let completedPages, let totalPages) = uploadState {
+      let percent = LCDUploadProgressPresentation.percentage(
+        completedAcknowledgements: completedPages,
+        totalAcknowledgements: totalPages
+      )
       return studioText(
-        "Input \(completedPages)/\(totalPages)",
-        "Input \(completedPages)/\(totalPages)",
+        "\(percent)% 전송 중",
+        "Transferring \(percent)%",
         language: language
       )
     }
@@ -322,8 +350,8 @@ struct LCDExperimentalTransferCard: View {
     }
     if !qualificationAllowsFreshDiagnostic {
       return studioText(
-        "영속 qualification receipt가 이미 진행 중이거나 완료되어 새 진단 전송을 차단했습니다.",
-        "A durable qualification receipt is already in progress or complete, so a new diagnostic transfer is blocked.",
+        "첫 시험이 이미 진행됐습니다. 아래 장치 적용 준비 카드에서 다음 단계를 확인하세요.",
+        "The first test has already started. Check the Device Apply readiness card below for the next step.",
         language: language
       )
     }
@@ -412,13 +440,21 @@ struct LCDExtendedQualificationCard: View {
   @State private var showsWiredPowerRemovalAttestation = false
   @State private var showsExtendedVisualMismatch = false
   @State private var showsInterruptedTransferReconciliation = false
+  @State private var showsDetailedSteps =
+    LCDExtendedQualificationDetailsPresentation.initiallyExpanded
 
   var body: some View {
     VStack(alignment: .leading, spacing: 14) {
       HStack(alignment: .top, spacing: 12) {
         VStack(alignment: .leading, spacing: 4) {
-          Text(studioText("40프레임 자격", "40-frame qualification", language: language))
-            .font(.headline)
+          Text(
+            studioText(
+              "장치 적용 준비",
+              "Device Apply readiness",
+              language: language
+            )
+          )
+          .font(.headline)
           Text(summary)
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -426,14 +462,33 @@ struct LCDExtendedQualificationCard: View {
         Spacer()
         StatusPill(
           label: state.permitsExtendedUpload
-            ? studioText("Core receipt 검증됨", "Core receipt verified", language: language)
-            : studioText("잠김", "Locked", language: language),
-          symbol: state.permitsExtendedUpload ? "checkmark.shield.fill" : "lock.shield",
-          tint: state.permitsExtendedUpload ? StudioPalette.mint : .secondary
+            ? studioText("적용 준비 완료", "Ready to Apply", language: language)
+            : state.permitsMaximumBoundaryTrial
+              ? studioText("140프레임 시험 필요", "140-frame test required", language: language)
+              : studioText("잠김", "Locked", language: language),
+          symbol: state.permitsExtendedUpload
+            ? "checkmark.shield.fill"
+            : state.permitsMaximumBoundaryTrial
+              ? "gauge.with.dots.needle.100percent"
+              : "lock.shield",
+          tint: state.permitsExtendedUpload
+            ? StudioPalette.mint
+            : state.permitsMaximumBoundaryTrial ? StudioPalette.coral : .secondary
         )
       }
 
-      recoverySequence
+      if LCDExtendedQualificationDetailsPresentation.isAvailable(for: state) {
+        DisclosureGroup(isExpanded: $showsDetailedSteps) {
+          recoverySequence
+            .padding(.top, 8)
+        } label: {
+          Label(
+            studioText("자세한 단계", "Detailed steps", language: language),
+            systemImage: "list.number"
+          )
+          .font(.caption.weight(.semibold))
+        }
+      }
 
       if let action = action {
         HStack(spacing: 10) {
@@ -450,7 +505,7 @@ struct LCDExtendedQualificationCard: View {
         }
       }
 
-      if case .awaitingExtendedVisualAttestation = state {
+      if awaitsSubmittedVisualReview {
         HStack(spacing: 10) {
           if canReviewExtendedVisualResult {
             Button(
@@ -499,16 +554,6 @@ struct LCDExtendedQualificationCard: View {
           .textSelection(.enabled)
       }
 
-      Label(
-        studioText(
-          "이 카드는 Core receipt를 표시할 뿐 자격을 직접 만들지 않습니다. 과거 실기 결과의 수동 import·backfill·일반 bypass는 없습니다.",
-          "This card only projects the Core receipt. It cannot create qualification, and there is no manual import, backfill, or generic bypass for an earlier trial.",
-          language: language
-        ),
-        systemImage: "checkmark.shield"
-      )
-      .font(.caption)
-      .foregroundStyle(.secondary)
     }
     .studioPanel()
     .confirmationDialog(
@@ -665,84 +710,135 @@ struct LCDExtendedQualificationCard: View {
     }
   }
 
+  private var awaitsSubmittedVisualReview: Bool {
+    switch state {
+    case .awaitingMaximumBoundaryVisualAttestation, .awaitingExtendedVisualAttestation:
+      true
+    default:
+      false
+    }
+  }
+
   private var summary: String {
     switch state {
     case .receiptUnavailable:
       studioText(
-        "production receipt가 없습니다. 새 build에서 고정 1프레임 실기를 다시 성공시키기 전에는 40프레임이 완전히 잠깁니다.",
-        "No production receipt exists. Forty-frame upload stays fully locked until a fresh fixed one-frame trial succeeds under this build.",
+        "장치 적용 준비가 필요합니다. 먼저 위의 1프레임 화면 시험을 진행하세요.",
+        "Device Apply is not ready. Start with the one-frame display test above.",
         language: language
       )
     case .awaitingVisualAttestation:
       studioText(
-        "새 1프레임 host sequence·commit·postflight receipt가 있습니다. 실제 LCD 모서리 표시를 별도로 확인해야 합니다.",
-        "A fresh one-frame host-sequence, commit, and postflight receipt exists. The visible LCD corners still require separate confirmation.",
+        "1프레임 전송이 끝났습니다. ‘네 모서리 확인’을 눌러 실제 LCD를 확인하세요.",
+        "The one-frame transfer is complete. Choose Confirm four corners and check the actual LCD.",
         language: language
       )
     case .awaitingObservedAbsence:
       studioText(
-        "육안 확인이 기록됐습니다. 이제 USB-mode cable removal 뒤 실제 장치 부재를 관찰해야 합니다.",
-        "Visual confirmation is recorded. Real device absence must now be observed after USB-mode cable removal.",
+        "LCD 확인이 끝났습니다. 키보드를 USB 모드에 둔 채 케이블을 분리하고 ‘분리 상태 새로고침’을 누르세요.",
+        "LCD review is complete. Keep the keyboard in USB mode, disconnect the cable, then choose Refresh while disconnected.",
         language: language
       )
     case .awaitingExactReappearance:
       studioText(
-        "실제 장치 부재를 관찰했습니다. 같은 원래 Mac USB 포트에서 동일 exact 4 collection 재등장이 필요합니다.",
-        "Real device absence was observed. The same exact four collections must reappear at the original Mac USB port.",
+        "장치가 사라진 것을 확인했습니다. 같은 Mac USB 포트에 다시 연결한 뒤 ‘재연결 상태 새로고침’을 누르세요.",
+        "Device absence is confirmed. Reconnect it to the same Mac USB port, then choose Refresh after reconnection.",
         language: language
       )
     case .awaitingWiredPowerRemovalAttestation:
       studioText(
-        "부재와 동일 장치 재등장을 순서대로 관찰했습니다. 실제 cable-removal 전원 제거에 대한 마지막 사용자 확인이 필요합니다.",
-        "Absence and exact reappearance were observed in order. One final user attestation is required for actual cable-removal power loss.",
+        "재연결까지 확인했습니다. 케이블 분리로 전원이 완전히 꺼졌다면 ‘USB 전원 제거 확인’을 누르세요.",
+        "Reconnection is confirmed. If cable removal fully powered off the device, choose Confirm wired-power removal.",
+        language: language
+      )
+    case .awaitingMaximumBoundaryTrial:
+      studioText(
+        "첫 시험과 복구가 끝났습니다. 편집기를 정확히 140프레임으로 만든 뒤 경계 시험을 시작하세요.",
+        "The first test and recovery are complete. Make the edit exactly 140 frames, then start the boundary test.",
+        language: language
+      )
+    case .maximumBoundaryTransferInProgress:
+      studioText(
+        "140프레임 전송이 진행 중이거나 중단된 상태입니다. 다른 장치 작업을 시작하지 마세요.",
+        "The 140-frame transfer is running or was interrupted. Do not start another device operation.",
+        language: language
+      )
+    case .awaitingMaximumBoundaryVisualAttestation:
+      studioText(
+        "140프레임 전송이 끝났습니다. ‘불변 예상 애니메이션과 비교’를 눌러 실제 LCD를 확인하세요.",
+        "The 140-frame transfer is complete. Choose Compare with immutable expected animation and check the actual LCD.",
+        language: language
+      )
+    case .awaitingMaximumBoundaryObservedAbsence:
+      studioText(
+        "LCD 일치 확인이 끝났습니다. USB 모드에서 케이블을 분리하고 ‘분리 상태 새로고침’을 누르세요.",
+        "LCD match review is complete. Disconnect the cable in USB mode, then choose Refresh while disconnected.",
+        language: language
+      )
+    case .awaitingMaximumBoundaryExactReappearance:
+      studioText(
+        "장치가 사라진 것을 확인했습니다. 같은 Mac USB 포트에 다시 연결한 뒤 ‘재연결 상태 새로고침’을 누르세요.",
+        "Device absence is confirmed. Reconnect it to the same Mac USB port, then choose Refresh after reconnection.",
+        language: language
+      )
+    case .awaitingMaximumBoundaryWiredPowerRemovalAttestation:
+      studioText(
+        "재연결까지 확인했습니다. 케이블 분리로 전원이 완전히 꺼졌다면 ‘USB 전원 제거 확인’을 누르세요.",
+        "Reconnection is confirmed. If cable removal fully powered off the device, choose Confirm wired-power removal.",
+        language: language
+      )
+    case .maximumBoundaryVisualMismatchQuarantinePending:
+      studioText(
+        "140프레임 화면이 다르거나 확인할 수 없어 장치 격리를 완료해야 합니다. 아래 재시도 버튼만 사용하세요.",
+        "The 140-frame display was wrong or unverifiable, so device quarantine must finish. Use only the retry button below.",
         language: language
       )
     case .qualified(let maximumFrameCount):
       studioText(
-        "전체 영속 provenance가 검증됐습니다. 최대 \(maximumFrameCount)프레임의 불변 editor snapshot만 별도 exact-plan 확인 뒤 적용할 수 있습니다.",
-        "The complete durable provenance is verified. Only an immutable editor snapshot of at most \(maximumFrameCount) frames may be applied after a separate exact-plan confirmation.",
+        "장치 적용 준비가 끝났습니다. 편집기에서 최대 \(maximumFrameCount)프레임 이미지를 선택해 적용하세요.",
+        "Device Apply is ready. Choose an image of up to \(maximumFrameCount) frames in the editor and apply it.",
         language: language
       )
     case .canonicalTransferInProgress:
       studioText(
-        "새 고정 1프레임 진단 lease가 다른 process에서 진행 중이거나 중단된 상태로 남았습니다. 새 전송이나 수동 해제는 허용되지 않습니다.",
-        "A fresh canonical one-frame lease is active in another process or remains after an interruption. No new transfer or manual clear is allowed.",
+        "1프레임 전송이 진행 중이거나 중단된 상태입니다. 다른 전송이 실행 중이 아니라면 아래에서 중단 상태를 정리하세요.",
+        "The one-frame transfer is running or was interrupted. If no other transfer is active, reconcile the interrupted state below.",
         language: language
       )
     case .canonicalVisualMismatchQuarantinePending:
       studioText(
-        "고정 진단 화면 오류/확인 불가가 기록됐고 durable quarantine 설정을 마치는 중입니다. 자동 해제·재시도하지 마세요.",
-        "A wrong or unverifiable canonical diagnostic result was recorded and durable quarantine is being armed. Do not auto-clear or retry.",
+        "1프레임 화면이 다르거나 확인할 수 없어 장치 격리를 완료해야 합니다. 일반 전송을 재시도하지 마세요.",
+        "The one-frame display was wrong or unverifiable, so device quarantine must finish. Do not retry a normal transfer.",
         language: language
       )
     case .extendedTransferInProgress:
       studioText(
-        "exact plan lease가 다른 process에서 진행 중이거나 중단된 상태로 남았습니다. 새 전송은 허용되지 않습니다. 실행 중인 process가 없다면 자동 해제하지 말고 quarantine 복구 뒤 새 고정 1프레임 진단부터 진행해야 합니다.",
-        "An exact-plan lease is active in another process or remains after an interruption. No new transfer is allowed. If no process is active, do not clear it automatically; complete any quarantine recovery, then restart from a fresh fixed one-frame diagnostic.",
+        "이미지 전송이 진행 중이거나 중단된 상태입니다. 다른 전송이 실행 중이 아니라면 아래에서 격리한 뒤 복구 절차를 진행하세요.",
+        "An image transfer is running or was interrupted. If no other transfer is active, quarantine it below and complete recovery.",
         language: language
       )
     case .interruptedTransferQuarantinePending:
       studioText(
-        "중단된 canonical/extended lease가 성공 권한으로 돌아가지 못하도록 receipt가 고정됐습니다. durable quarantine과 자격 폐기를 완료해야 합니다.",
-        "The interrupted canonical/extended lease is pinned so it cannot return to positive authority. Durable quarantine and qualification revocation must be completed.",
+        "중단된 전송이 있습니다. 아래 버튼으로 장치 격리를 완료한 뒤 복구 절차를 진행하세요.",
+        "A transfer was interrupted. Finish device quarantine below, then complete recovery.",
         language: language
       )
-    case .awaitingExtendedVisualAttestation(let digest, let frameCount, let pageCount):
+    case .awaitingExtendedVisualAttestation:
       studioText(
-        "\(frameCount)프레임·\(pageCount)페이지 host 전송 뒤 실제 LCD 결과 확인을 기다립니다. SHA-256 \(digest.prefix(8))…\(digest.suffix(6)). 육안 확인 전에는 자격이 다시 열리지 않습니다.",
-        "Awaiting visual LCD review after a \(frameCount)-frame, \(pageCount)-page host transfer. SHA-256 \(digest.prefix(8))…\(digest.suffix(6)). Qualification does not reopen before visual review.",
+        "이미지 전송이 끝났습니다. ‘불변 예상 애니메이션과 비교’를 눌러 실제 LCD를 확인하세요.",
+        "The image transfer is complete. Choose Compare with immutable expected animation and check the actual LCD.",
         language: language
       )
     case .extendedVisualMismatchQuarantinePending:
       studioText(
-        "화면 오류/확인 불가가 기록됐고 durable quarantine 설정을 마치는 중입니다. 자동 해제·재시도하지 마세요.",
-        "A wrong or unverifiable display result was recorded and durable quarantine is being armed. Do not auto-clear or retry.",
+        "화면이 다르거나 확인할 수 없어 장치 격리를 완료해야 합니다. 일반 전송을 재시도하지 마세요.",
+        "The display was wrong or unverifiable, so device quarantine must finish. Do not retry a normal transfer.",
         language: language
       )
     case .invalidatedRequiresFreshDiagnostic:
       studioText(
-        "제출됐거나 불확실한 확장 전송 실패로 자격이 무효화됐습니다. USB-mode cable recovery 뒤 새 고정 1프레임 실기부터 다시 진행해야 합니다.",
-        "A submitted or uncertain extended-transfer failure invalidated qualification. Complete USB-mode cable recovery, then restart with a fresh fixed one-frame trial.",
+        "이미지 전송에 실패해 장치 적용이 잠겼습니다. USB 모드 케이블 복구를 마친 뒤 1프레임 시험부터 다시 시작하세요.",
+        "Image transfer failed and Device Apply is locked. Complete USB-mode cable recovery, then restart with the one-frame test.",
         language: language
       )
     case .blocked(let message):
@@ -756,36 +852,83 @@ struct LCDExtendedQualificationCard: View {
       qualificationStep(
         number: 1,
         text: studioText(
-          "새 build에서 고정 1프레임 16/16 + commit + postflight",
-          "Fresh fixed one-frame 16/16 + commit + postflight", language: language),
+          "1프레임 화면 전송",
+          "One-frame display transfer", language: language),
         completed: stepCompletion >= 1
       )
       qualificationStep(
         number: 2,
         text: studioText(
-          "네 모서리 색·위치·방향 육안 확인", "Visual corner color, position, and orientation",
+          "LCD 네 모서리 확인", "Check the four LCD corners",
           language: language),
         completed: stepCompletion >= 2
       )
       qualificationStep(
         number: 3,
         text: studioText(
-          "USB mode 유지 + cable 분리 뒤 real absence 관찰",
-          "Keep USB mode + disconnect cable + observe real absence", language: language),
+          "USB 모드에서 케이블 분리 후 장치 사라짐 확인",
+          "Disconnect in USB mode and confirm device absence", language: language),
         completed: stepCompletion >= 3
       )
       qualificationStep(
         number: 4,
         text: studioText(
-          "같은 원래 USB 포트에서 동일 exact 4 collection 재등장",
-          "Same exact four collections at the original USB port", language: language),
+          "같은 USB 포트에 다시 연결",
+          "Reconnect to the same USB port", language: language),
         completed: stepCompletion >= 4
       )
       qualificationStep(
         number: 5,
         text: studioText(
-          "USB 전원 제거 사용자 attestation", "Wired-power-removal user attestation", language: language),
+          "완전 전원 차단 확인", "Confirm complete power loss", language: language),
         completed: stepCompletion >= 5
+      )
+      Divider()
+        .padding(.vertical, 2)
+      qualificationStep(
+        number: 6,
+        text: studioText(
+          "140프레임 경계 화면 전송",
+          "140-frame boundary display transfer",
+          language: language
+        ),
+        completed: stepCompletion >= 6
+      )
+      qualificationStep(
+        number: 7,
+        text: studioText(
+          "전송한 화면과 실제 LCD 비교",
+          "Compare the transferred image with the actual LCD",
+          language: language
+        ),
+        completed: stepCompletion >= 7
+      )
+      qualificationStep(
+        number: 8,
+        text: studioText(
+          "USB 모드에서 케이블 분리 후 장치 사라짐 확인",
+          "Disconnect in USB mode and confirm device absence",
+          language: language
+        ),
+        completed: stepCompletion >= 8
+      )
+      qualificationStep(
+        number: 9,
+        text: studioText(
+          "같은 USB 포트에 다시 연결",
+          "Reconnect to the same USB port",
+          language: language
+        ),
+        completed: stepCompletion >= 9
+      )
+      qualificationStep(
+        number: 10,
+        text: studioText(
+          "완전 전원 차단 확인",
+          "Confirm complete power loss",
+          language: language
+        ),
+        completed: stepCompletion >= 10
       )
     }
   }
@@ -804,7 +947,7 @@ struct LCDExtendedQualificationCard: View {
     switch state {
     case .receiptUnavailable, .canonicalTransferInProgress,
       .canonicalVisualMismatchQuarantinePending,
-      .extendedVisualMismatchQuarantinePending, .interruptedTransferQuarantinePending,
+      .interruptedTransferQuarantinePending,
       .invalidatedRequiresFreshDiagnostic, .blocked:
       0
     case .awaitingVisualAttestation:
@@ -815,10 +958,21 @@ struct LCDExtendedQualificationCard: View {
       3
     case .awaitingWiredPowerRemovalAttestation:
       4
-    case .qualified, .awaitingExtendedVisualAttestation:
+    case .awaitingMaximumBoundaryTrial, .maximumBoundaryTransferInProgress:
       5
-    case .extendedTransferInProgress:
-      0
+    case .awaitingMaximumBoundaryVisualAttestation:
+      6
+    case .maximumBoundaryVisualMismatchQuarantinePending:
+      6
+    case .awaitingMaximumBoundaryObservedAbsence:
+      7
+    case .awaitingMaximumBoundaryExactReappearance:
+      8
+    case .awaitingMaximumBoundaryWiredPowerRemovalAttestation:
+      9
+    case .qualified, .extendedTransferInProgress, .awaitingExtendedVisualAttestation,
+      .extendedVisualMismatchQuarantinePending:
+      10
     }
   }
 
@@ -832,20 +986,22 @@ struct LCDExtendedQualificationCard: View {
 
   private var action: Action? {
     switch state {
-    case .receiptUnavailable, .qualified, .awaitingExtendedVisualAttestation,
+    case .receiptUnavailable, .awaitingMaximumBoundaryTrial, .qualified,
+      .awaitingMaximumBoundaryVisualAttestation, .awaitingExtendedVisualAttestation,
       .invalidatedRequiresFreshDiagnostic, .blocked:
       nil
-    case .canonicalTransferInProgress, .extendedTransferInProgress,
+    case .canonicalTransferInProgress, .maximumBoundaryTransferInProgress,
+      .extendedTransferInProgress,
       .interruptedTransferQuarantinePending:
       Action(
         title: studioText(
-          "중단된 lease reconcile…",
-          "Reconcile interrupted lease…",
+          "중단된 전송 정리…",
+          "Resolve interrupted transfer…",
           language: language
         ),
         detail: studioText(
-          "다른 process가 실행 중이 아닐 때만 quarantine으로 전환",
-          "Move to quarantine only when no other process is active",
+          "다른 KeyCanvas 전송이 실행 중이지 않을 때만 진행",
+          "Continue only when no other KeyCanvas transfer is active",
           language: language
         ),
         isEnabled: canReconcileInterruptedTransfer,
@@ -855,29 +1011,45 @@ struct LCDExtendedQualificationCard: View {
     case .canonicalVisualMismatchQuarantinePending:
       Action(
         title: studioText(
-          "고정 진단 격리 완료 재시도…",
-          "Retry canonical quarantine completion…",
+          "장치 격리 완료 재시도…",
+          "Retry device quarantine…",
           language: language
         ),
         detail: studioText(
-          "성공으로 되돌리지 않고 저장된 mismatch만 처리",
-          "Processes only the saved mismatch; never restores success",
+          "저장된 화면 오류에 대한 격리만 다시 시도",
+          "Retries quarantine only for the saved display error",
           language: language
         ),
         isEnabled: canReportCanonicalVisualMismatch,
         isDestructive: true,
         perform: { showsCanonicalMismatchRetry = true }
       )
-    case .extendedVisualMismatchQuarantinePending:
+    case .maximumBoundaryVisualMismatchQuarantinePending:
       Action(
         title: studioText(
-          "확장 전송 격리 완료 재시도…",
-          "Retry extended quarantine completion…",
+          "장치 격리 완료 재시도…",
+          "Retry device quarantine…",
           language: language
         ),
         detail: studioText(
-          "성공 attestation 없이 저장된 mismatch만 처리",
-          "Processes only the saved mismatch, without a success attestation",
+          "저장된 화면 오류에 대한 격리만 다시 시도",
+          "Retries quarantine only for the saved display error",
+          language: language
+        ),
+        isEnabled: canReportExtendedVisualMismatch,
+        isDestructive: true,
+        perform: { showsExtendedVisualMismatch = true }
+      )
+    case .extendedVisualMismatchQuarantinePending:
+      Action(
+        title: studioText(
+          "장치 격리 완료 재시도…",
+          "Retry device quarantine…",
+          language: language
+        ),
+        detail: studioText(
+          "저장된 화면 오류에 대한 격리만 다시 시도",
+          "Retries quarantine only for the saved display error",
           language: language
         ),
         isEnabled: canReportExtendedVisualMismatch,
@@ -888,33 +1060,34 @@ struct LCDExtendedQualificationCard: View {
       Action(
         title: studioText("네 모서리 확인…", "Confirm four corners…", language: language),
         detail: studioText(
-          "host receipt와 별개의 육안 확인", "Visual evidence separate from the host receipt",
+          "실제 LCD를 직접 확인", "Check the actual LCD directly",
           language: language),
         isEnabled: canRecordVisualAttestation || canReportCanonicalVisualMismatch,
         isDestructive: true,
         perform: { showsVisualAttestation = true }
       )
-    case .awaitingObservedAbsence:
+    case .awaitingObservedAbsence, .awaitingMaximumBoundaryObservedAbsence:
       Action(
         title: studioText("분리 상태 새로고침", "Refresh while disconnected", language: language),
         detail: studioText(
-          "checkbox가 아니라 real IOHID 열거 0개가 필요",
-          "Requires real zero-collection IOHID enumeration, not a checkbox", language: language),
+          "케이블이 분리된 상태에서 장치 검색",
+          "Search for the device while the cable is disconnected", language: language),
         isEnabled: canRefreshHardware,
         isDestructive: false,
         perform: onRefreshHardware
       )
-    case .awaitingExactReappearance:
+    case .awaitingExactReappearance, .awaitingMaximumBoundaryExactReappearance:
       Action(
         title: studioText("재연결 상태 새로고침", "Refresh after reconnection", language: language),
         detail: studioText(
-          "원래 Mac USB 포트와 exact 4 collection 필요",
-          "Requires the original Mac USB port and exact four collections", language: language),
+          "같은 USB 포트에 연결한 뒤 장치 검색",
+          "Reconnect to the same USB port, then search for the device", language: language),
         isEnabled: canRefreshHardware,
         isDestructive: false,
         perform: onRefreshHardware
       )
-    case .awaitingWiredPowerRemovalAttestation:
+    case .awaitingWiredPowerRemovalAttestation,
+      .awaitingMaximumBoundaryWiredPowerRemovalAttestation:
       Action(
         title: studioText("USB 전원 제거 확인…", "Confirm wired-power removal…", language: language),
         detail: studioText(

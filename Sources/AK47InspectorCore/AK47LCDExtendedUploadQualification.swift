@@ -2,7 +2,7 @@ import CryptoKit
 import Darwin
 import Foundation
 
-/// Durable authority state for the deliberately bounded 1...40-frame LCD path.
+/// Durable authority state for the deliberately bounded 1...140-frame LCD path.
 ///
 /// A previous live result, a checkbox, or the absence of a quarantine marker is
 /// never authority. Qualification starts only when a receipt-enabled build
@@ -14,6 +14,13 @@ package enum AK47LCDExtendedUploadQualificationState: Equatable, Sendable {
   case awaitingObservedUSBDisconnection
   case awaitingExactSamePortReappearance
   case awaitingUSBPowerCycleAttestation
+  case awaitingMaximumBoundaryTrial
+  case maximumBoundaryTransferInProgress
+  case awaitingMaximumBoundaryVisualAttestation
+  case awaitingMaximumBoundaryObservedUSBDisconnection
+  case awaitingMaximumBoundaryExactSamePortReappearance
+  case awaitingMaximumBoundaryUSBPowerCycleAttestation
+  case maximumBoundaryVisualMismatchQuarantinePending
   case qualified(maximumFrameCount: Int)
   case canonicalTransferInProgress
   case canonicalVisualMismatchQuarantinePending
@@ -120,7 +127,7 @@ public enum AK47LCDExtendedUploadQualificationError: Error, Equatable, Localized
   public var errorDescription: String? {
     switch self {
     case .unavailable:
-      "The 1...40-frame LCD path has no completed durable qualification receipt."
+      "The 1...\(AK47LCDUploadAdapter.qualifiedMaximumFrameCount)-frame LCD path has no completed durable qualification receipt."
     case .wrongTarget:
       "The durable LCD qualification belongs to a different USB target or location."
     case .transitionNotAllowed:
@@ -156,6 +163,7 @@ struct AK47LCDCanonicalTransferLease: Equatable, Sendable {
 enum AK47LCDQualificationGateAdmissionKind: Hashable, Sendable {
   case canonical
   case extended
+  case maximumBoundary
 }
 
 /// Process-local, one-use capability carried only from a durable qualification
@@ -190,6 +198,23 @@ extension AK47LCDQualifiedUploadLease {
   }
 }
 
+struct AK47LCDMaximumBoundaryTransferLease: Equatable, Sendable {
+  let identifier: UUID
+  let target: HIDDeviceQuarantineIdentity
+  let planFingerprintSHA256: String
+}
+
+extension AK47LCDMaximumBoundaryTransferLease {
+  var gateAdmission: AK47LCDQualificationGateAdmission {
+    AK47LCDQualificationGateAdmission(
+      kind: .maximumBoundary,
+      leaseIdentifier: identifier,
+      target: target,
+      planFingerprintSHA256: planFingerprintSHA256
+    )
+  }
+}
+
 enum AK47LCDQualifiedUploadLeaseOutcome: Equatable, Sendable {
   case succeeded
   case failedBeforeSubmissionWithConfirmedCleanup
@@ -214,6 +239,14 @@ protocol AK47LCDExtendedUploadQualificationServicing: AnyObject {
     _ lease: AK47LCDQualifiedUploadLease,
     outcome: AK47LCDQualifiedUploadLeaseOutcome
   ) throws
+  func claimMaximumBoundaryTransfer(
+    plan: AK47LCDUploadPlan,
+    planFingerprintSHA256: String
+  ) throws -> AK47LCDMaximumBoundaryTransferLease
+  func finishMaximumBoundaryTransfer(
+    _ lease: AK47LCDMaximumBoundaryTransferLease,
+    outcome: AK47LCDQualifiedUploadLeaseOutcome
+  ) throws
 }
 
 enum AK47LCDQualificationPhase: String, Codable {
@@ -223,6 +256,13 @@ enum AK47LCDQualificationPhase: String, Codable {
   case awaitingObservedUSBDisconnection
   case awaitingExactSamePortReappearance
   case awaitingUSBPowerCycleAttestation
+  case awaitingMaximumBoundaryTrial
+  case maximumBoundaryTransferInProgress
+  case awaitingMaximumBoundaryVisualAttestation
+  case awaitingMaximumBoundaryObservedUSBDisconnection
+  case awaitingMaximumBoundaryExactSamePortReappearance
+  case awaitingMaximumBoundaryUSBPowerCycleAttestation
+  case maximumBoundaryVisualMismatchQuarantinePending
   case qualified
   case extendedTransferInProgress
   case awaitingExtendedVisualAttestation
@@ -236,10 +276,10 @@ enum AK47LCDQualificationProvenance: String, Codable {
 }
 
 struct AK47LCDQualificationRecord: Codable, Equatable {
-  static let schemaVersion = 1
+  static let schemaVersion = 2
 
-  let schemaVersion: Int
-  let policyRevision: String
+  var schemaVersion: Int
+  var policyRevision: String
   let target: HIDDeviceQuarantineIdentity
   let provenance: AK47LCDQualificationProvenance
   let canonicalTopologySignatureSHA256: String
@@ -270,6 +310,18 @@ struct AK47LCDQualificationRecord: Codable, Equatable {
   var pendingVisualPartitionBudgetByteCount: Int?
   var pendingVisualTransferEndAddressExclusive: UInt64?
   var pendingVisualHostCompletedAt: Date?
+  var maximumBoundaryPlanFingerprintSHA256: String?
+  var maximumBoundaryContainerSHA256: String?
+  var maximumBoundaryFrameCount: Int?
+  var maximumBoundaryPageCount: Int?
+  var maximumBoundaryContainerByteCount: Int?
+  var maximumBoundaryPartitionBudgetByteCount: Int?
+  var maximumBoundaryTransferEndAddressExclusive: UInt64?
+  var maximumBoundaryHostCompletedAt: Date?
+  var maximumBoundaryVisualAttestedAt: Date?
+  var maximumBoundaryUSBDisconnectionAbsenceObservedAt: Date?
+  var maximumBoundaryExactSamePortReappearanceObservedAt: Date?
+  var maximumBoundaryUSBModeCablePowerCycleAttestedAt: Date?
   var lastSuccessfulContainerSHA256: String?
   var lastSuccessfulTransferAt: Date?
 }
@@ -391,7 +443,7 @@ final class AK47LCDQualificationFilePersistence: AK47LCDQualificationPersisting 
     let directory = receiptURL.deletingLastPathComponent()
     do {
       try prepareStorageDirectory(directory)
-      let validatedRecord = try validated(record)
+      let validatedRecord = try validatedForSave(record)
       let encoder = JSONEncoder()
       encoder.outputFormatting = [.sortedKeys]
       let data = try encoder.encode(validatedRecord)
@@ -465,15 +517,17 @@ final class AK47LCDQualificationFilePersistence: AK47LCDQualificationPersisting 
       throw AK47LCDQualificationPersistenceError.invalidReceipt
     }
     do {
-      return try validated(JSONDecoder().decode(AK47LCDQualificationRecord.self, from: data))
-    } catch let error as AK47LCDQualificationPersistenceError {
-      throw error
+      // Policy validation deliberately belongs to the state store. It must hold
+      // the cross-process lock while atomically migrating one exact legacy v1
+      // receipt; validating only the current policy here would reject that
+      // receipt before migration can run.
+      return try JSONDecoder().decode(AK47LCDQualificationRecord.self, from: data)
     } catch {
       throw AK47LCDQualificationPersistenceError.invalidReceipt
     }
   }
 
-  private func validated(
+  private func validatedForSave(
     _ record: AK47LCDQualificationRecord
   ) throws -> AK47LCDQualificationRecord {
     guard AK47LCDExtendedUploadQualificationStateStore.isValid(record) else {
@@ -553,8 +607,9 @@ final class AK47LCDQualificationFilePersistence: AK47LCDQualificationPersisting 
 final class AK47LCDExtendedUploadQualificationStateStore:
   AK47LCDExtendedUploadQualificationServicing, @unchecked Sendable
 {
-  static let maximumQualifiedFrameCount = 40
-  static let policyRevision = "ak47-lcd-qualified-upload-v1"
+  static let maximumQualifiedFrameCount = AK47LCDUploadAdapter.qualifiedMaximumFrameCount
+  static let legacyPolicyRevision = "ak47-lcd-qualified-upload-v1"
+  static let policyRevision = "ak47-lcd-qualified-upload-v2"
   private static let exactTopology: Set<AK47LCDQualificationCollectionSignature> = [
     .init(usagePage: 0x0001, usage: 0x0006, input: 8, output: 1, feature: 0),
     .init(usagePage: 0x000C, usage: 0x0001, input: 16, output: 1, feature: 1),
@@ -586,8 +641,17 @@ final class AK47LCDExtendedUploadQualificationStateStore:
     self.now = now
     self.quarantineTarget = quarantineTarget
     do {
-      if let record = try persistence.load(), !Self.isValid(record) {
-        persistenceUnavailable = true
+      let processLock = try persistence.acquireProcessLock()
+      defer { processLock.release() }
+      if let record = try persistence.load() {
+        if Self.isValid(record) {
+          return
+        }
+        guard let migrated = Self.migratedLegacyV1Record(record) else {
+          persistenceUnavailable = true
+          return
+        }
+        try persistence.save(migrated)
       }
     } catch {
       persistenceUnavailable = true
@@ -599,12 +663,26 @@ final class AK47LCDExtendedUploadQualificationStateStore:
       guard let record else {
         return AK47LCDExtendedUploadQualificationSnapshot(target: nil, state: .unavailable)
       }
+      let exposesMaximumBoundaryIdentity: Bool
+      switch record.phase {
+      case .awaitingMaximumBoundaryVisualAttestation,
+        .awaitingMaximumBoundaryObservedUSBDisconnection,
+        .awaitingMaximumBoundaryExactSamePortReappearance,
+        .awaitingMaximumBoundaryUSBPowerCycleAttestation,
+        .maximumBoundaryVisualMismatchQuarantinePending:
+        exposesMaximumBoundaryIdentity = true
+      default:
+        exposesMaximumBoundaryIdentity = false
+      }
       return AK47LCDExtendedUploadQualificationSnapshot(
         target: Self.target(from: record.target),
         state: Self.publicState(record.phase),
-        pendingContainerSHA256: record.pendingVisualContainerSHA256,
-        pendingFrameCount: record.pendingVisualFrameCount,
-        pendingPageCount: record.pendingVisualPageCount
+        pendingContainerSHA256: exposesMaximumBoundaryIdentity
+          ? record.maximumBoundaryContainerSHA256 : record.pendingVisualContainerSHA256,
+        pendingFrameCount: exposesMaximumBoundaryIdentity
+          ? record.maximumBoundaryFrameCount : record.pendingVisualFrameCount,
+        pendingPageCount: exposesMaximumBoundaryIdentity
+          ? record.maximumBoundaryPageCount : record.pendingVisualPageCount
       )
     }
       ?? AK47LCDExtendedUploadQualificationSnapshot(
@@ -680,6 +758,18 @@ final class AK47LCDExtendedUploadQualificationStateStore:
         pendingVisualPartitionBudgetByteCount: nil,
         pendingVisualTransferEndAddressExclusive: nil,
         pendingVisualHostCompletedAt: nil,
+        maximumBoundaryPlanFingerprintSHA256: nil,
+        maximumBoundaryContainerSHA256: nil,
+        maximumBoundaryFrameCount: nil,
+        maximumBoundaryPageCount: nil,
+        maximumBoundaryContainerByteCount: nil,
+        maximumBoundaryPartitionBudgetByteCount: nil,
+        maximumBoundaryTransferEndAddressExclusive: nil,
+        maximumBoundaryHostCompletedAt: nil,
+        maximumBoundaryVisualAttestedAt: nil,
+        maximumBoundaryUSBDisconnectionAbsenceObservedAt: nil,
+        maximumBoundaryExactSamePortReappearanceObservedAt: nil,
+        maximumBoundaryUSBModeCablePowerCycleAttestedAt: nil,
         lastSuccessfulContainerSHA256: nil,
         lastSuccessfulTransferAt: nil
       )
@@ -796,6 +886,19 @@ final class AK47LCDExtendedUploadQualificationStateStore:
           record.exactSamePortReappearanceObservedAt = now()
           record.phase = .awaitingUSBPowerCycleAttestation
           return record
+        case .awaitingMaximumBoundaryObservedUSBDisconnection:
+          let compatibleRecords = records.filter {
+            record.target.possiblyRepresentsSameDevice(as: $0)
+          }
+          guard compatibleRecords.isEmpty else { return record }
+          record.maximumBoundaryUSBDisconnectionAbsenceObservedAt = now()
+          record.phase = .awaitingMaximumBoundaryExactSamePortReappearance
+          return record
+        case .awaitingMaximumBoundaryExactSamePortReappearance:
+          guard Self.hasExactTopology(records, target: record.target) else { return record }
+          record.maximumBoundaryExactSamePortReappearanceObservedAt = now()
+          record.phase = .awaitingMaximumBoundaryUSBPowerCycleAttestation
+          return record
         default:
           return record
         }
@@ -824,6 +927,193 @@ final class AK47LCDExtendedUploadQualificationStateStore:
         throw AK47LCDExtendedUploadQualificationError.transitionNotAllowed
       }
       record.usbModeCablePowerCycleAttestedAt = attestation.attestedAt
+      record.phase = .awaitingMaximumBoundaryTrial
+      return record
+    }
+  }
+
+  func claimMaximumBoundaryTransfer(
+    plan: AK47LCDUploadPlan,
+    planFingerprintSHA256: String
+  ) throws -> AK47LCDMaximumBoundaryTransferLease {
+    try AK47LCDUploadPreflight.validateStructuralModel(plan)
+    try AK47LCDUploadAdapter.validateMaximumBoundaryTrial(plan)
+    guard Self.isLowercaseSHA256(planFingerprintSHA256),
+      planFingerprintSHA256 == AK47LCDUploadPlanFingerprint.hex(plan)
+    else {
+      throw AK47LCDExtendedUploadQualificationError.qualificationLeaseMismatch
+    }
+    let identity = HIDDeviceQuarantineIdentity(target: plan.target)
+    let lease = AK47LCDMaximumBoundaryTransferLease(
+      identifier: UUID(),
+      target: identity,
+      planFingerprintSHA256: planFingerprintSHA256
+    )
+    try mutateRecord { record in
+      guard var record else { throw AK47LCDExtendedUploadQualificationError.unavailable }
+      guard record.target == identity else {
+        throw AK47LCDExtendedUploadQualificationError.wrongTarget
+      }
+      guard record.phase == .awaitingMaximumBoundaryTrial else {
+        throw AK47LCDExtendedUploadQualificationError.transitionNotAllowed
+      }
+      record.phase = .maximumBoundaryTransferInProgress
+      record.activeLeaseIdentifier = lease.identifier
+      record.activePlanFingerprintSHA256 = planFingerprintSHA256
+      record.activeContainerSHA256 = AK47LCDUploadDigest.sha256Hex(plan.container.data)
+      record.activeFrameCount = plan.container.frameCount
+      record.activePageCount = plan.container.pageCount
+      record.activeContainerByteCount = plan.container.data.count
+      record.activePartitionBudgetByteCount = plan.container.partitionBudgetByteCount
+      record.activeTransferEndAddressExclusive =
+        AK47LCDUploadPreflight.externalFlashStartAddress + UInt64(plan.container.data.count)
+      return record
+    }
+    registerLocalGateAdmission(lease.gateAdmission)
+    return lease
+  }
+
+  func finishMaximumBoundaryTransfer(
+    _ lease: AK47LCDMaximumBoundaryTransferLease,
+    outcome: AK47LCDQualifiedUploadLeaseOutcome
+  ) throws {
+    defer { revokeLocalGateAdmission(lease.gateAdmission) }
+    var requiresQuarantine = false
+    try mutateRecord { record in
+      guard var record else { throw AK47LCDExtendedUploadQualificationError.unavailable }
+      guard record.target == lease.target,
+        record.phase == .maximumBoundaryTransferInProgress,
+        record.activeLeaseIdentifier == lease.identifier,
+        record.activePlanFingerprintSHA256 == lease.planFingerprintSHA256
+      else {
+        throw AK47LCDExtendedUploadQualificationError.qualificationLeaseMismatch
+      }
+      switch outcome {
+      case .succeeded:
+        record.maximumBoundaryPlanFingerprintSHA256 = record.activePlanFingerprintSHA256
+        record.maximumBoundaryContainerSHA256 = record.activeContainerSHA256
+        record.maximumBoundaryFrameCount = record.activeFrameCount
+        record.maximumBoundaryPageCount = record.activePageCount
+        record.maximumBoundaryContainerByteCount = record.activeContainerByteCount
+        record.maximumBoundaryPartitionBudgetByteCount =
+          record.activePartitionBudgetByteCount
+        record.maximumBoundaryTransferEndAddressExclusive =
+          record.activeTransferEndAddressExclusive
+        record.maximumBoundaryHostCompletedAt = now()
+        record.phase = .awaitingMaximumBoundaryVisualAttestation
+        Self.clearActiveLeaseMetadata(&record)
+      case .failedBeforeSubmissionWithConfirmedCleanup:
+        record.phase = .awaitingMaximumBoundaryTrial
+        Self.clearActiveLeaseMetadata(&record)
+      case .submittedOrUncertainFailure:
+        requiresQuarantine = true
+        record.phase = .interruptedTransferQuarantinePending
+      }
+      return record
+    }
+    guard requiresQuarantine else { return }
+    do {
+      try quarantineTarget(lease.target)
+    } catch {
+      throw AK47LCDExtendedUploadQualificationError.persistenceUnavailable
+    }
+    try mutateRecord { record in
+      guard var record else { throw AK47LCDExtendedUploadQualificationError.unavailable }
+      guard record.target == lease.target,
+        record.phase == .interruptedTransferQuarantinePending,
+        record.activeLeaseIdentifier == lease.identifier
+      else {
+        throw AK47LCDExtendedUploadQualificationError.qualificationLeaseMismatch
+      }
+      Self.clearActiveLeaseMetadata(&record)
+      Self.clearMaximumBoundaryMetadata(&record)
+      record.phase = .invalidatedRequiresFreshDiagnostic
+      return record
+    }
+  }
+
+  func recordMaximumBoundaryVisualAttestation(
+    for target: AK47WiredDeviceTarget,
+    attestation: AK47LCDQualifiedUploadVisualAttestation
+  ) throws {
+    let identity = HIDDeviceQuarantineIdentity(target: target)
+    try mutateRecord { record in
+      guard var record else { throw AK47LCDExtendedUploadQualificationError.unavailable }
+      guard record.target == identity else {
+        throw AK47LCDExtendedUploadQualificationError.wrongTarget
+      }
+      guard record.phase == .awaitingMaximumBoundaryVisualAttestation,
+        record.maximumBoundaryContainerSHA256 == attestation.containerSHA256,
+        let hostCompletedAt = record.maximumBoundaryHostCompletedAt,
+        attestation.attestedAt >= hostCompletedAt
+      else {
+        throw AK47LCDExtendedUploadQualificationError.transitionNotAllowed
+      }
+      record.maximumBoundaryVisualAttestedAt = attestation.attestedAt
+      record.phase = .awaitingMaximumBoundaryObservedUSBDisconnection
+      return record
+    }
+  }
+
+  func reportMaximumBoundaryVisualMismatch(
+    for target: AK47WiredDeviceTarget,
+    containerSHA256: String
+  ) throws {
+    let identity = HIDDeviceQuarantineIdentity(target: target)
+    try mutateRecord { record in
+      guard var record else { throw AK47LCDExtendedUploadQualificationError.unavailable }
+      guard record.target == identity else {
+        throw AK47LCDExtendedUploadQualificationError.wrongTarget
+      }
+      guard
+        record.phase == .awaitingMaximumBoundaryVisualAttestation
+          || record.phase == .maximumBoundaryVisualMismatchQuarantinePending,
+        record.maximumBoundaryContainerSHA256 == containerSHA256
+      else {
+        throw AK47LCDExtendedUploadQualificationError.transitionNotAllowed
+      }
+      record.phase = .maximumBoundaryVisualMismatchQuarantinePending
+      return record
+    }
+    do {
+      try quarantineTarget(identity)
+    } catch {
+      throw AK47LCDExtendedUploadQualificationError.persistenceUnavailable
+    }
+    try mutateRecord { record in
+      guard var record else { throw AK47LCDExtendedUploadQualificationError.unavailable }
+      guard record.target == identity,
+        record.phase == .maximumBoundaryVisualMismatchQuarantinePending,
+        record.maximumBoundaryContainerSHA256 == containerSHA256
+      else {
+        throw AK47LCDExtendedUploadQualificationError.transitionNotAllowed
+      }
+      Self.clearMaximumBoundaryMetadata(&record)
+      record.phase = .invalidatedRequiresFreshDiagnostic
+      return record
+    }
+  }
+
+  func acknowledgeMaximumBoundaryUSBModeCablePowerCycle(
+    for target: AK47WiredDeviceTarget,
+    attestation: AK47LCDUSBModeCablePowerCycleAttestation
+  ) throws {
+    let identity = HIDDeviceQuarantineIdentity(target: target)
+    try mutateRecord { record in
+      guard var record else { throw AK47LCDExtendedUploadQualificationError.unavailable }
+      guard record.target == identity else {
+        throw AK47LCDExtendedUploadQualificationError.wrongTarget
+      }
+      guard record.phase == .awaitingMaximumBoundaryUSBPowerCycleAttestation,
+        let reappearance = record.maximumBoundaryExactSamePortReappearanceObservedAt,
+        let digest = record.maximumBoundaryContainerSHA256,
+        attestation.attestedAt >= reappearance
+      else {
+        throw AK47LCDExtendedUploadQualificationError.transitionNotAllowed
+      }
+      record.maximumBoundaryUSBModeCablePowerCycleAttestedAt = attestation.attestedAt
+      record.lastSuccessfulContainerSHA256 = digest
+      record.lastSuccessfulTransferAt = attestation.attestedAt
       record.phase = .qualified
       return record
     }
@@ -994,6 +1284,7 @@ final class AK47LCDExtendedUploadQualificationStateStore:
       }
       guard
         record.phase == .canonicalTransferInProgress
+          || record.phase == .maximumBoundaryTransferInProgress
           || record.phase == .extendedTransferInProgress
           || record.phase == .interruptedTransferQuarantinePending
       else {
@@ -1019,6 +1310,7 @@ final class AK47LCDExtendedUploadQualificationStateStore:
       }
       Self.clearCanonicalLeaseMetadata(&record)
       Self.clearActiveLeaseMetadata(&record)
+      Self.clearMaximumBoundaryMetadata(&record)
       record.phase = .invalidatedRequiresFreshDiagnostic
       return record
     }
@@ -1028,6 +1320,8 @@ final class AK47LCDExtendedUploadQualificationStateStore:
     switch snapshot.state {
     case .canonicalTransferInProgress,
       .canonicalVisualMismatchQuarantinePending,
+      .maximumBoundaryTransferInProgress,
+      .maximumBoundaryVisualMismatchQuarantinePending,
       .extendedTransferInProgress,
       .extendedVisualMismatchQuarantinePending,
       .interruptedTransferQuarantinePending,
@@ -1078,6 +1372,11 @@ final class AK47LCDExtendedUploadQualificationStateStore:
       case .extended:
         matches =
           record.phase == .extendedTransferInProgress
+          && record.activeLeaseIdentifier == admission.leaseIdentifier
+          && record.activePlanFingerprintSHA256 == admission.planFingerprintSHA256
+      case .maximumBoundary:
+        matches =
+          record.phase == .maximumBoundaryTransferInProgress
           && record.activeLeaseIdentifier == admission.leaseIdentifier
           && record.activePlanFingerprintSHA256 == admission.planFingerprintSHA256
       }
@@ -1173,6 +1472,20 @@ final class AK47LCDExtendedUploadQualificationStateStore:
     }
   }
 
+  static func migratedLegacyV1Record(
+    _ record: AK47LCDQualificationRecord
+  ) -> AK47LCDQualificationRecord? {
+    guard record.schemaVersion == 1,
+      record.policyRevision == legacyPolicyRevision,
+      record.phase == .qualified
+    else { return nil }
+    var migrated = record
+    migrated.schemaVersion = AK47LCDQualificationRecord.schemaVersion
+    migrated.policyRevision = policyRevision
+    migrated.phase = .awaitingMaximumBoundaryTrial
+    return isValid(migrated) ? migrated : nil
+  }
+
   static func isValid(_ record: AK47LCDQualificationRecord) -> Bool {
     guard record.schemaVersion == AK47LCDQualificationRecord.schemaVersion,
       record.policyRevision == policyRevision,
@@ -1188,7 +1501,7 @@ final class AK47LCDExtendedUploadQualificationStateStore:
       record.canonicalTransferStartedAt.timeIntervalSinceReferenceDate.isFinite
     else { return false }
 
-    let timestamps = [
+    let canonicalTimestamps = [
       Optional(record.canonicalTransferStartedAt),
       record.canonicalTransferCompletedAt,
       record.canonicalVisualAttestedAt,
@@ -1196,8 +1509,16 @@ final class AK47LCDExtendedUploadQualificationStateStore:
       record.exactSamePortReappearanceObservedAt,
       record.usbModeCablePowerCycleAttestedAt,
     ].compactMap { $0 }
-    guard timestamps.allSatisfy({ $0.timeIntervalSinceReferenceDate.isFinite }),
-      zip(timestamps, timestamps.dropFirst()).allSatisfy({ $0 <= $1 })
+    let boundaryTimestamps = [
+      record.maximumBoundaryHostCompletedAt,
+      record.maximumBoundaryVisualAttestedAt,
+      record.maximumBoundaryUSBDisconnectionAbsenceObservedAt,
+      record.maximumBoundaryExactSamePortReappearanceObservedAt,
+      record.maximumBoundaryUSBModeCablePowerCycleAttestedAt,
+    ].compactMap { $0 }
+    guard Self.areFiniteAndOrdered(canonicalTimestamps),
+      Self.areFiniteAndOrdered(boundaryTimestamps),
+      boundaryTimestamps.first.map({ $0 >= canonicalTimestamps.last! }) ?? true
     else { return false }
 
     let hasVisual = record.canonicalVisualAttestedAt != nil
@@ -1214,152 +1535,121 @@ final class AK47LCDExtendedUploadQualificationStateStore:
     let hasAnyCanonicalLeaseMetadata =
       record.canonicalAttemptLeaseIdentifier != nil
       || record.canonicalAttemptPlanFingerprintSHA256 != nil
-    let hasLease: Bool = {
-      guard record.activeLeaseIdentifier != nil,
-        let planFingerprint = record.activePlanFingerprintSHA256,
-        Self.isLowercaseSHA256(planFingerprint),
-        let containerDigest = record.activeContainerSHA256,
-        Self.isLowercaseSHA256(containerDigest),
-        let frameCount = record.activeFrameCount,
-        (1...maximumQualifiedFrameCount).contains(frameCount),
-        let expectedPageCount = Self.minimalPageCount(frameCount),
-        expectedPageCount <= 633,
-        record.activePageCount == expectedPageCount,
-        let expectedByteCount = Self.checkedPaddedByteCount(pageCount: expectedPageCount),
-        expectedByteCount <= 2_592_768,
-        record.activeContainerByteCount == expectedByteCount,
-        let budget = record.activePartitionBudgetByteCount,
-        budget >= expectedByteCount,
-        budget <= 2_592_768,
-        budget.isMultiple(of: AK47LCDFormat.transferPageByteCount),
-        let expectedEnd = Self.checkedTransferEnd(byteCount: expectedByteCount),
-        expectedEnd <= 0x9B_9000,
-        record.activeTransferEndAddressExclusive == expectedEnd
-      else { return false }
-      return true
-    }()
-    let hasAnyLeaseMetadata =
-      record.activeLeaseIdentifier != nil
-      || record.activePlanFingerprintSHA256 != nil
-      || record.activeContainerSHA256 != nil
-      || record.activeFrameCount != nil
-      || record.activePageCount != nil
-      || record.activeContainerByteCount != nil
-      || record.activePartitionBudgetByteCount != nil
-      || record.activeTransferEndAddressExclusive != nil
-    let hasPendingVisual: Bool = {
-      guard
-        let planFingerprint = record.pendingVisualPlanFingerprintSHA256,
-        Self.isLowercaseSHA256(planFingerprint),
-        let containerDigest = record.pendingVisualContainerSHA256,
-        Self.isLowercaseSHA256(containerDigest),
-        let frameCount = record.pendingVisualFrameCount,
-        let expectedPageCount = Self.minimalPageCount(frameCount),
-        record.pendingVisualPageCount == expectedPageCount,
-        let expectedByteCount = Self.checkedPaddedByteCount(pageCount: expectedPageCount),
-        record.pendingVisualContainerByteCount == expectedByteCount,
-        let pendingBudget = record.pendingVisualPartitionBudgetByteCount,
-        pendingBudget >= expectedByteCount,
-        pendingBudget <= 2_592_768,
-        pendingBudget.isMultiple(of: AK47LCDFormat.transferPageByteCount),
-        let expectedEnd = Self.checkedTransferEnd(byteCount: expectedByteCount),
-        record.pendingVisualTransferEndAddressExclusive == expectedEnd,
-        let hostCompletedAt = record.pendingVisualHostCompletedAt,
-        hostCompletedAt.timeIntervalSinceReferenceDate.isFinite,
-        let powerAttestation = record.usbModeCablePowerCycleAttestedAt,
-        hostCompletedAt >= powerAttestation,
-        record.lastSuccessfulTransferAt.map({ hostCompletedAt >= $0 }) ?? true
-      else { return false }
-      return true
-    }()
-    let hasAnyPendingVisualMetadata =
-      record.pendingVisualPlanFingerprintSHA256 != nil
-      || record.pendingVisualContainerSHA256 != nil
-      || record.pendingVisualFrameCount != nil
-      || record.pendingVisualPageCount != nil
-      || record.pendingVisualContainerByteCount != nil
-      || record.pendingVisualPartitionBudgetByteCount != nil
-      || record.pendingVisualTransferEndAddressExclusive != nil
-      || record.pendingVisualHostCompletedAt != nil
-    let lastSuccessIsValid: Bool = {
-      switch (record.lastSuccessfulContainerSHA256, record.lastSuccessfulTransferAt) {
-      case (nil, nil):
-        return true
-      case (.some(let digest), .some(let date)):
-        guard Self.isLowercaseSHA256(digest),
-          date.timeIntervalSinceReferenceDate.isFinite,
-          let powerAttestation = record.usbModeCablePowerCycleAttestedAt
-        else { return false }
-        return date >= powerAttestation
-      default:
-        return false
-      }
-    }()
-    guard lastSuccessIsValid else { return false }
+    let hasLease = Self.hasValidActiveLease(record)
+    let hasMaximumBoundaryLease =
+      hasLease
+      && record.activeFrameCount == AK47LCDUploadAdapter.qualifiedMaximumFrameCount
+      && record.activePageCount == AK47LCDUploadAdapter.qualifiedMaximumPageCount
+      && record.activeContainerByteCount
+        == AK47LCDUploadAdapter.qualifiedMaximumContainerByteCount
+      && record.activePartitionBudgetByteCount
+        == AK47LCDUploadAdapter.qualifiedMaximumContainerByteCount
+      && record.activeTransferEndAddressExclusive
+        == AK47LCDUploadAdapter.qualifiedTransferEndAddressExclusive
+    let hasAnyLeaseMetadata = Self.hasAnyActiveLeaseMetadata(record)
+    let hasPendingVisual = Self.hasValidPendingVisual(record)
+    let hasAnyPendingVisualMetadata = Self.hasAnyPendingVisualMetadata(record)
+    let hasMaximumBoundaryPlan = Self.hasValidMaximumBoundaryPlan(record)
+    let hasAnyMaximumBoundaryMetadata = Self.hasAnyMaximumBoundaryMetadata(record)
+    let hasBoundaryVisual = record.maximumBoundaryVisualAttestedAt != nil
+    let hasBoundaryAbsence = record.maximumBoundaryUSBDisconnectionAbsenceObservedAt != nil
+    let hasBoundaryReappearance =
+      record.maximumBoundaryExactSamePortReappearanceObservedAt != nil
+    let hasBoundaryPower = record.maximumBoundaryUSBModeCablePowerCycleAttestedAt != nil
+    let hasCompleteMaximumBoundaryEvidence =
+      hasMaximumBoundaryPlan && hasBoundaryVisual && hasBoundaryAbsence
+      && hasBoundaryReappearance && hasBoundaryPower
+    guard Self.hasValidLastSuccess(record) else { return false }
 
+    let hasCanonicalAuthority =
+      hasCanonicalCompletion && !hasAnyCanonicalLeaseMetadata && hasVisual
+      && hasAbsence && hasReappearance && hasPowerAttestation
     switch record.phase {
     case .canonicalTransferInProgress:
       return !hasCanonicalCompletion && record.canonicalAcknowledgedPageCount == nil
         && hasCanonicalLease && !hasVisual && !hasAbsence && !hasReappearance
         && !hasPowerAttestation && !hasAnyLeaseMetadata && !hasAnyPendingVisualMetadata
+        && !hasAnyMaximumBoundaryMetadata
         && record.lastSuccessfulContainerSHA256 == nil && record.lastSuccessfulTransferAt == nil
-    case .awaitingCanonicalFixtureVisualAttestation:
+    case .awaitingCanonicalFixtureVisualAttestation, .canonicalVisualMismatchQuarantinePending:
       return hasCanonicalCompletion && !hasAnyCanonicalLeaseMetadata && !hasVisual
         && !hasAbsence && !hasReappearance && !hasPowerAttestation
         && !hasAnyLeaseMetadata && !hasAnyPendingVisualMetadata
-    case .canonicalVisualMismatchQuarantinePending:
-      return hasCanonicalCompletion && !hasAnyCanonicalLeaseMetadata && !hasVisual
-        && !hasAbsence && !hasReappearance && !hasPowerAttestation
-        && !hasAnyLeaseMetadata && !hasAnyPendingVisualMetadata
+        && !hasAnyMaximumBoundaryMetadata
     case .awaitingObservedUSBDisconnection:
       return hasCanonicalCompletion && !hasAnyCanonicalLeaseMetadata && hasVisual
         && !hasAbsence && !hasReappearance && !hasPowerAttestation
         && !hasAnyLeaseMetadata && !hasAnyPendingVisualMetadata
+        && !hasAnyMaximumBoundaryMetadata
     case .awaitingExactSamePortReappearance:
       return hasCanonicalCompletion && !hasAnyCanonicalLeaseMetadata && hasVisual
         && hasAbsence && !hasReappearance && !hasPowerAttestation
         && !hasAnyLeaseMetadata && !hasAnyPendingVisualMetadata
+        && !hasAnyMaximumBoundaryMetadata
     case .awaitingUSBPowerCycleAttestation:
       return hasCanonicalCompletion && !hasAnyCanonicalLeaseMetadata && hasVisual
         && hasAbsence && hasReappearance && !hasPowerAttestation
         && !hasAnyLeaseMetadata && !hasAnyPendingVisualMetadata
+        && !hasAnyMaximumBoundaryMetadata
+    case .awaitingMaximumBoundaryTrial:
+      return hasCanonicalAuthority && !hasAnyLeaseMetadata && !hasAnyPendingVisualMetadata
+        && !hasAnyMaximumBoundaryMetadata
+    case .maximumBoundaryTransferInProgress:
+      return hasCanonicalAuthority && hasMaximumBoundaryLease && !hasAnyPendingVisualMetadata
+        && !hasAnyMaximumBoundaryMetadata
+    case .awaitingMaximumBoundaryVisualAttestation,
+      .maximumBoundaryVisualMismatchQuarantinePending:
+      return hasCanonicalAuthority && !hasAnyLeaseMetadata && !hasAnyPendingVisualMetadata
+        && hasMaximumBoundaryPlan && !hasBoundaryVisual && !hasBoundaryAbsence
+        && !hasBoundaryReappearance && !hasBoundaryPower
+    case .awaitingMaximumBoundaryObservedUSBDisconnection:
+      return hasCanonicalAuthority && !hasAnyLeaseMetadata && !hasAnyPendingVisualMetadata
+        && hasMaximumBoundaryPlan && hasBoundaryVisual && !hasBoundaryAbsence
+        && !hasBoundaryReappearance && !hasBoundaryPower
+    case .awaitingMaximumBoundaryExactSamePortReappearance:
+      return hasCanonicalAuthority && !hasAnyLeaseMetadata && !hasAnyPendingVisualMetadata
+        && hasMaximumBoundaryPlan && hasBoundaryVisual && hasBoundaryAbsence
+        && !hasBoundaryReappearance && !hasBoundaryPower
+    case .awaitingMaximumBoundaryUSBPowerCycleAttestation:
+      return hasCanonicalAuthority && !hasAnyLeaseMetadata && !hasAnyPendingVisualMetadata
+        && hasMaximumBoundaryPlan && hasBoundaryVisual && hasBoundaryAbsence
+        && hasBoundaryReappearance && !hasBoundaryPower
     case .qualified:
-      return hasCanonicalCompletion && !hasAnyCanonicalLeaseMetadata && hasVisual
-        && hasAbsence && hasReappearance && hasPowerAttestation
-        && !hasAnyLeaseMetadata && !hasAnyPendingVisualMetadata
+      return hasCanonicalAuthority && !hasAnyLeaseMetadata && !hasAnyPendingVisualMetadata
+        && hasCompleteMaximumBoundaryEvidence
     case .extendedTransferInProgress:
-      return hasCanonicalCompletion && !hasAnyCanonicalLeaseMetadata && hasVisual
-        && hasAbsence && hasReappearance && hasPowerAttestation && hasLease
+      return hasCanonicalAuthority && hasCompleteMaximumBoundaryEvidence && hasLease
         && !hasAnyPendingVisualMetadata
     case .awaitingExtendedVisualAttestation, .extendedVisualMismatchQuarantinePending:
-      return hasCanonicalCompletion && !hasAnyCanonicalLeaseMetadata && hasVisual
-        && hasAbsence && hasReappearance && hasPowerAttestation
+      return hasCanonicalAuthority && hasCompleteMaximumBoundaryEvidence
         && !hasAnyLeaseMetadata && hasPendingVisual
     case .interruptedTransferQuarantinePending:
       let interruptedCanonical =
         !hasCanonicalCompletion && record.canonicalAcknowledgedPageCount == nil
         && hasCanonicalLease && !hasVisual && !hasAbsence && !hasReappearance
         && !hasPowerAttestation && !hasAnyLeaseMetadata && !hasAnyPendingVisualMetadata
+        && !hasAnyMaximumBoundaryMetadata
         && record.lastSuccessfulContainerSHA256 == nil && record.lastSuccessfulTransferAt == nil
+      let interruptedMaximumBoundary =
+        hasCanonicalAuthority && hasMaximumBoundaryLease && !hasAnyPendingVisualMetadata
+        && !hasAnyMaximumBoundaryMetadata
       let interruptedExtended =
-        hasCanonicalCompletion && !hasAnyCanonicalLeaseMetadata && hasVisual
-        && hasAbsence && hasReappearance && hasPowerAttestation && hasLease
+        hasCanonicalAuthority && hasCompleteMaximumBoundaryEvidence && hasLease
         && !hasAnyPendingVisualMetadata
-      return interruptedCanonical || interruptedExtended
+      return interruptedCanonical || interruptedMaximumBoundary || interruptedExtended
     case .invalidatedRequiresFreshDiagnostic:
       let failedCanonical =
-        !hasCanonicalCompletion
-        && record.canonicalAcknowledgedPageCount == nil
+        !hasCanonicalCompletion && record.canonicalAcknowledgedPageCount == nil
         && !hasVisual && !hasAbsence && !hasReappearance && !hasPowerAttestation
-      let invalidatedQualified =
-        hasCanonicalCompletion && hasVisual && hasAbsence
-        && hasReappearance && hasPowerAttestation
       let invalidatedCanonicalVisual =
         hasCanonicalCompletion && !hasVisual && !hasAbsence
         && !hasReappearance && !hasPowerAttestation
+      let invalidatedAfterCanonical =
+        hasCanonicalAuthority
+        && (!hasAnyMaximumBoundaryMetadata || hasCompleteMaximumBoundaryEvidence)
       return !hasAnyCanonicalLeaseMetadata && !hasAnyLeaseMetadata
         && !hasAnyPendingVisualMetadata
-        && (failedCanonical || invalidatedCanonicalVisual || invalidatedQualified)
+        && (failedCanonical || invalidatedCanonicalVisual || invalidatedAfterCanonical)
     }
   }
 
@@ -1375,6 +1665,153 @@ final class AK47LCDExtendedUploadQualificationStateStore:
     )
     guard !frameOverflow, !rawOverflow, !roundingOverflow else { return nil }
     return roundingNumerator / AK47LCDFormat.transferPageByteCount
+  }
+
+  private static func areFiniteAndOrdered(_ dates: [Date]) -> Bool {
+    dates.allSatisfy { $0.timeIntervalSinceReferenceDate.isFinite }
+      && zip(dates, dates.dropFirst()).allSatisfy { $0 <= $1 }
+  }
+
+  private static func hasValidActiveLease(_ record: AK47LCDQualificationRecord) -> Bool {
+    guard record.activeLeaseIdentifier != nil,
+      let planFingerprint = record.activePlanFingerprintSHA256,
+      isLowercaseSHA256(planFingerprint),
+      let containerDigest = record.activeContainerSHA256,
+      isLowercaseSHA256(containerDigest),
+      let frameCount = record.activeFrameCount,
+      (1...maximumQualifiedFrameCount).contains(frameCount),
+      let expectedPageCount = minimalPageCount(frameCount),
+      expectedPageCount <= AK47LCDUploadAdapter.qualifiedMaximumPageCount,
+      record.activePageCount == expectedPageCount,
+      let expectedByteCount = checkedPaddedByteCount(pageCount: expectedPageCount),
+      expectedByteCount <= AK47LCDUploadAdapter.qualifiedMaximumContainerByteCount,
+      record.activeContainerByteCount == expectedByteCount,
+      let budget = record.activePartitionBudgetByteCount,
+      budget >= expectedByteCount,
+      budget <= AK47LCDUploadAdapter.qualifiedMaximumContainerByteCount,
+      budget.isMultiple(of: AK47LCDFormat.transferPageByteCount),
+      let expectedEnd = checkedTransferEnd(byteCount: expectedByteCount),
+      expectedEnd <= AK47LCDUploadAdapter.qualifiedTransferEndAddressExclusive,
+      record.activeTransferEndAddressExclusive == expectedEnd
+    else { return false }
+    return true
+  }
+
+  private static func hasAnyActiveLeaseMetadata(_ record: AK47LCDQualificationRecord) -> Bool {
+    record.activeLeaseIdentifier != nil
+      || record.activePlanFingerprintSHA256 != nil
+      || record.activeContainerSHA256 != nil
+      || record.activeFrameCount != nil
+      || record.activePageCount != nil
+      || record.activeContainerByteCount != nil
+      || record.activePartitionBudgetByteCount != nil
+      || record.activeTransferEndAddressExclusive != nil
+  }
+
+  private static func hasValidPendingVisual(_ record: AK47LCDQualificationRecord) -> Bool {
+    guard
+      let planFingerprint = record.pendingVisualPlanFingerprintSHA256,
+      isLowercaseSHA256(planFingerprint),
+      let containerDigest = record.pendingVisualContainerSHA256,
+      isLowercaseSHA256(containerDigest),
+      let frameCount = record.pendingVisualFrameCount,
+      let expectedPageCount = minimalPageCount(frameCount),
+      record.pendingVisualPageCount == expectedPageCount,
+      let expectedByteCount = checkedPaddedByteCount(pageCount: expectedPageCount),
+      record.pendingVisualContainerByteCount == expectedByteCount,
+      let pendingBudget = record.pendingVisualPartitionBudgetByteCount,
+      pendingBudget >= expectedByteCount,
+      pendingBudget <= AK47LCDUploadAdapter.qualifiedMaximumContainerByteCount,
+      pendingBudget.isMultiple(of: AK47LCDFormat.transferPageByteCount),
+      let expectedEnd = checkedTransferEnd(byteCount: expectedByteCount),
+      record.pendingVisualTransferEndAddressExclusive == expectedEnd,
+      let hostCompletedAt = record.pendingVisualHostCompletedAt,
+      hostCompletedAt.timeIntervalSinceReferenceDate.isFinite,
+      let boundaryPower = record.maximumBoundaryUSBModeCablePowerCycleAttestedAt,
+      hostCompletedAt >= boundaryPower,
+      record.lastSuccessfulTransferAt.map({ hostCompletedAt >= $0 }) ?? true
+    else { return false }
+    return true
+  }
+
+  private static func hasAnyPendingVisualMetadata(
+    _ record: AK47LCDQualificationRecord
+  ) -> Bool {
+    record.pendingVisualPlanFingerprintSHA256 != nil
+      || record.pendingVisualContainerSHA256 != nil
+      || record.pendingVisualFrameCount != nil
+      || record.pendingVisualPageCount != nil
+      || record.pendingVisualContainerByteCount != nil
+      || record.pendingVisualPartitionBudgetByteCount != nil
+      || record.pendingVisualTransferEndAddressExclusive != nil
+      || record.pendingVisualHostCompletedAt != nil
+  }
+
+  private static func hasValidMaximumBoundaryPlan(
+    _ record: AK47LCDQualificationRecord
+  ) -> Bool {
+    guard
+      let planFingerprint = record.maximumBoundaryPlanFingerprintSHA256,
+      isLowercaseSHA256(planFingerprint),
+      let containerDigest = record.maximumBoundaryContainerSHA256,
+      isLowercaseSHA256(containerDigest),
+      record.maximumBoundaryFrameCount == AK47LCDUploadAdapter.qualifiedMaximumFrameCount,
+      record.maximumBoundaryPageCount == AK47LCDUploadAdapter.qualifiedMaximumPageCount,
+      record.maximumBoundaryContainerByteCount
+        == AK47LCDUploadAdapter.qualifiedMaximumContainerByteCount,
+      record.maximumBoundaryPartitionBudgetByteCount
+        == AK47LCDUploadAdapter.qualifiedMaximumContainerByteCount,
+      record.maximumBoundaryTransferEndAddressExclusive
+        == AK47LCDUploadAdapter.qualifiedTransferEndAddressExclusive,
+      let hostCompletedAt = record.maximumBoundaryHostCompletedAt,
+      hostCompletedAt.timeIntervalSinceReferenceDate.isFinite,
+      let canonicalPower = record.usbModeCablePowerCycleAttestedAt,
+      hostCompletedAt >= canonicalPower
+    else { return false }
+    if let lastSuccess = record.lastSuccessfulTransferAt {
+      if let boundaryPower = record.maximumBoundaryUSBModeCablePowerCycleAttestedAt {
+        guard lastSuccess >= boundaryPower else { return false }
+      } else {
+        // While the boundary proof is still pending, it must have started
+        // after any last success retained by an eligible migrated v1 receipt.
+        guard hostCompletedAt >= lastSuccess else { return false }
+      }
+    }
+    return true
+  }
+
+  private static func hasAnyMaximumBoundaryMetadata(
+    _ record: AK47LCDQualificationRecord
+  ) -> Bool {
+    record.maximumBoundaryPlanFingerprintSHA256 != nil
+      || record.maximumBoundaryContainerSHA256 != nil
+      || record.maximumBoundaryFrameCount != nil
+      || record.maximumBoundaryPageCount != nil
+      || record.maximumBoundaryContainerByteCount != nil
+      || record.maximumBoundaryPartitionBudgetByteCount != nil
+      || record.maximumBoundaryTransferEndAddressExclusive != nil
+      || record.maximumBoundaryHostCompletedAt != nil
+      || record.maximumBoundaryVisualAttestedAt != nil
+      || record.maximumBoundaryUSBDisconnectionAbsenceObservedAt != nil
+      || record.maximumBoundaryExactSamePortReappearanceObservedAt != nil
+      || record.maximumBoundaryUSBModeCablePowerCycleAttestedAt != nil
+  }
+
+  private static func hasValidLastSuccess(_ record: AK47LCDQualificationRecord) -> Bool {
+    switch (record.lastSuccessfulContainerSHA256, record.lastSuccessfulTransferAt) {
+    case (nil, nil):
+      return true
+    case (.some(let digest), .some(let date)):
+      guard isLowercaseSHA256(digest),
+        date.timeIntervalSinceReferenceDate.isFinite,
+        let requiredPower =
+          record.maximumBoundaryUSBModeCablePowerCycleAttestedAt
+          ?? record.usbModeCablePowerCycleAttestedAt
+      else { return false }
+      return date >= requiredPower
+    default:
+      return false
+    }
   }
 
   private static func validateCanonicalPlan(_ plan: AK47LCDUploadPlan) throws {
@@ -1422,6 +1859,23 @@ final class AK47LCDExtendedUploadQualificationStateStore:
     record.activeTransferEndAddressExclusive = nil
   }
 
+  private static func clearMaximumBoundaryMetadata(
+    _ record: inout AK47LCDQualificationRecord
+  ) {
+    record.maximumBoundaryPlanFingerprintSHA256 = nil
+    record.maximumBoundaryContainerSHA256 = nil
+    record.maximumBoundaryFrameCount = nil
+    record.maximumBoundaryPageCount = nil
+    record.maximumBoundaryContainerByteCount = nil
+    record.maximumBoundaryPartitionBudgetByteCount = nil
+    record.maximumBoundaryTransferEndAddressExclusive = nil
+    record.maximumBoundaryHostCompletedAt = nil
+    record.maximumBoundaryVisualAttestedAt = nil
+    record.maximumBoundaryUSBDisconnectionAbsenceObservedAt = nil
+    record.maximumBoundaryExactSamePortReappearanceObservedAt = nil
+    record.maximumBoundaryUSBModeCablePowerCycleAttestedAt = nil
+  }
+
   private static func checkedPaddedByteCount(pageCount: Int) -> Int? {
     let (byteCount, overflow) = pageCount.multipliedReportingOverflow(
       by: AK47LCDFormat.transferPageByteCount
@@ -1460,6 +1914,20 @@ final class AK47LCDExtendedUploadQualificationStateStore:
       .awaitingExactSamePortReappearance
     case .awaitingUSBPowerCycleAttestation:
       .awaitingUSBPowerCycleAttestation
+    case .awaitingMaximumBoundaryTrial:
+      .awaitingMaximumBoundaryTrial
+    case .maximumBoundaryTransferInProgress:
+      .maximumBoundaryTransferInProgress
+    case .awaitingMaximumBoundaryVisualAttestation:
+      .awaitingMaximumBoundaryVisualAttestation
+    case .awaitingMaximumBoundaryObservedUSBDisconnection:
+      .awaitingMaximumBoundaryObservedUSBDisconnection
+    case .awaitingMaximumBoundaryExactSamePortReappearance:
+      .awaitingMaximumBoundaryExactSamePortReappearance
+    case .awaitingMaximumBoundaryUSBPowerCycleAttestation:
+      .awaitingMaximumBoundaryUSBPowerCycleAttestation
+    case .maximumBoundaryVisualMismatchQuarantinePending:
+      .maximumBoundaryVisualMismatchQuarantinePending
     case .qualified:
       .qualified(maximumFrameCount: maximumQualifiedFrameCount)
     case .extendedTransferInProgress:
@@ -1573,6 +2041,36 @@ package enum AK47LCDExtendedUploadQualification {
     try store.acknowledgeUSBModeCablePowerCycle(for: target, attestation: attestation)
   }
 
+  package static func recordMaximumBoundaryVisualAttestation(
+    for target: AK47WiredDeviceTarget,
+    attestation: AK47LCDQualifiedUploadVisualAttestation
+  ) throws {
+    try store.recordMaximumBoundaryVisualAttestation(
+      for: target,
+      attestation: attestation
+    )
+  }
+
+  package static func reportMaximumBoundaryVisualMismatch(
+    for target: AK47WiredDeviceTarget,
+    containerSHA256: String
+  ) throws {
+    try store.reportMaximumBoundaryVisualMismatch(
+      for: target,
+      containerSHA256: containerSHA256
+    )
+  }
+
+  package static func acknowledgeMaximumBoundaryUSBModeCablePowerCycle(
+    for target: AK47WiredDeviceTarget,
+    attestation: AK47LCDUSBModeCablePowerCycleAttestation
+  ) throws {
+    try store.acknowledgeMaximumBoundaryUSBModeCablePowerCycle(
+      for: target,
+      attestation: attestation
+    )
+  }
+
   package static func recordQualifiedUploadVisualAttestation(
     for target: AK47WiredDeviceTarget,
     attestation: AK47LCDQualifiedUploadVisualAttestation
@@ -1629,5 +2127,22 @@ package enum AK47LCDExtendedUploadQualification {
     outcome: AK47LCDQualifiedUploadLeaseOutcome
   ) throws {
     try store.finishQualifiedLease(lease, outcome: outcome)
+  }
+
+  static func claimMaximumBoundaryTransfer(
+    plan: AK47LCDUploadPlan,
+    planFingerprintSHA256: String
+  ) throws -> AK47LCDMaximumBoundaryTransferLease {
+    try store.claimMaximumBoundaryTransfer(
+      plan: plan,
+      planFingerprintSHA256: planFingerprintSHA256
+    )
+  }
+
+  static func finishMaximumBoundaryTransfer(
+    _ lease: AK47LCDMaximumBoundaryTransferLease,
+    outcome: AK47LCDQualifiedUploadLeaseOutcome
+  ) throws {
+    try store.finishMaximumBoundaryTransfer(lease, outcome: outcome)
   }
 }

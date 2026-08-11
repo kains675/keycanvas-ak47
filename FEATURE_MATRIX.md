@@ -18,10 +18,18 @@ RGB·내장 조명의 세 영역 기본값 risk model은 counts/page risk만 pur
 공장초기화가 아닙니다. live 작업은 별도 확인이
 필요하고, Feature 단계는 35ms 간격과 필요한 64바이트 ACK byte 3 검증을 사용하며
 자동 재시도하지 않습니다. LCD concrete adapter의 bootstrap은 프로젝트가 만든
-고정 1프레임·16페이지 진단 fixture만 받습니다. 새 Core 영속 receipt에서 전체
-qualification 순서를 마친 exact 대상에는 현재 editor의 불변 1…40프레임 plan만
-별도 exact 확인으로 허용합니다. production receipt는 비어 시작하고 과거 실기를
-backfill하지 않으므로 그전까지 UI는 잠깁니다. 아래에서
+고정 1프레임·16페이지 진단 fixture만 받습니다. 정책 v2는 이 canonical 자격 뒤에도
+일반 editor Apply를 열지 않고 정확히 140프레임·2215페이지인 불변 경계 plan 하나만
+별도 시험으로 허용합니다. host 성공, 제출한 RGB565의 육안 일치, USB-mode cable
+removal 뒤 real absence, 원래 port exact4 재등장과 완전 무전원 attestation을 모두
+마친 exact 대상에서만 일반 1…140프레임 Apply를 엽니다. 이번 production KeyCanvas
+실기는 2215개 ACK sequence와 commit·exact postflight, 전체 재생·반복·색·프레임 순서,
+cable-off real absence, 같은 port exact4 재등장과 애니메이션 지속을 모두 확인해 최종
+policy-v2 140프레임 qualified 상태가 됐습니다. 이 macOS 결과는 별도의 Windows 관찰과
+구분합니다. 검증된 v1 qualified receipt는
+canonical·복구 provenance만 v2 경계시험 대기 상태로 이관하며 140 성공 authority는
+만들지 않습니다. receipt 이전의 evidence-only 실기는 계속 backfill하지 않습니다.
+아래에서
 “Windows 기능”은 호환성 목표를 식별하기 위한 기능 범주일 뿐, 같은 화면이나 사용
 흐름을 복제한다는 뜻이 아닙니다.
 
@@ -95,7 +103,7 @@ backfill하지 않으므로 그전까지 UI는 잠깁니다. 아래에서
 | 프레임·그리기·텍스트 편집 | 이미지/GIF/영상 추출 프레임의 추가·삭제·복제·순서 이동, 0…511ms 지연, 독자 bitmap text·pen 편집과 GIF 내보내기. 실제 LCD와 같은 240×135·16:9 canvas에서 fit/fill/crop/stretch를 비파괴로 즉시 미리보고, fill/crop의 원본 viewport를 X/Y 1px·10px 화살표와 crop map으로 조정한 뒤 전체 원본 프레임에 명시적으로 적용 | 구현 | undo/redo, 서로 다른 원본의 프레임별 crop, 고급 도구 | L |
 | 240×135 RGB565 컨테이너 | 완전히 합성한 opaque 프레임을 little-endian RGB565로 만들고 256바이트 header와 `0xFF`로 채운 정확한 4096바이트 page를 로컬 파일로 내보냄. 1…140프레임·최대 2215페이지와 지연 byte wrap을 검증 | 구현 | 이 host-side ceiling은 물리 SPI partition 끝이나 안전한 장치 용량을 증명하지 않음 | L |
 | 시간 동기화 | 장치 검사기에서 별도 확인 뒤 현재 Mac의 로컬 날짜·시각을 첫 번째 시계 슬롯에 한 번 전송. ACK가 정의된 단계를 검증하고 자동 재시도하지 않음. 수정된 트랜잭션의 단발 실기 성공 | 부분 구현 | 장치의 현재 시각 readback, 정확한 이전 값 복원과 자동 rollback, 화면의 육안 시각 확인은 없음 | W |
-| LCD 이미지 장치 전송 | 고정 모서리 4색 1프레임·16페이지·exact SHA bootstrap과, Core의 target-bound durable qualification을 모두 마친 뒤 현재 in-memory editor 값을 복사한 불변 1…40프레임 exact plan을 보내는 별도 경로를 구현. final sheet가 target/frame/page/bytes/address/SHA/delay를 표시하고 일회용 승인을 plan에 bind | 실험적 부분 구현 | production receipt는 빈 상태에서 시작하고 과거 실기를 import/backfill하지 않음. bootstrap host 성공→모서리 육안 확인→USB-mode cable removal real absence→원래 port exact4 재등장→완전 무전원 attestation 순서를 강제. 각 qualified host 성공 뒤에도 exact submitted RGB565 preview 육안 확인 전에는 잠기며, 틀림/확인 불가는 retryable pending을 거쳐 quarantine+자격 폐기. readback/backup/rollback 없음, >40 live와 raw payload는 잠금 | W + U |
+| LCD 이미지 장치 전송 | 고정 모서리 4색 1프레임·16페이지·exact SHA bootstrap 뒤 정책 v2가 일반 Apply를 계속 잠그고, 현재 in-memory editor에서 복사한 정확히 140프레임·2215페이지의 불변 plan 하나만 경계 시험으로 승인. final sheet는 target/frame/page/bytes/address/SHA/delay와 단일 실험 확인을 표시하고 일회용 승인을 exact plan에 bind. production KeyCanvas 실기에서 2215 ACK sequence·commit·exact postflight, 전체 재생·반복·색·프레임 순서, USB-mode cable-off real absence·원래 port exact4 재등장·애니메이션 지속을 확인해 정책 v2가 140프레임 qualified 됨 | 실험적 부분 구현 | 이 결과는 별도의 Windows 관찰과 구분되는 exact-target 실기 근거이며 page-index/readback/물리 partition/rollback 증명은 아님. 미자격 target의 일반 1…140 Apply는 잠기며 mismatch·확인 불가·중단은 quarantine+자격 폐기로 진행. receipt 이전 evidence-only 실기는 backfill하지 않고 raw payload는 노출하지 않음 | W + U |
 | 현재 화면 이미지 읽기 | 없음. 로컬 자산 미리보기는 장치 화면의 readback이 아님 | 미구현 | 장치가 화면 이미지 읽기를 지원하는지부터 알 수 없으며 개인정보·저작권 경계 확인 필요 | R + U |
 
 ## Settings
@@ -122,7 +130,7 @@ backfill하지 않으므로 그전까지 UI는 잠깁니다. 아래에서
 | 제한적 Feature 적용 | 작업별 확인 뒤 시계, 선택한 내장 모드 하나, 또는 누락 없는 84키 RGB 표만 직렬 적용. exact target/topology를 전후 확인하고 35ms pacing, bounded async operation, 필요한 ACK byte 3 검증을 사용. 시계·모드 1·모드 14·84키 RGB의 독립 실기 완료 | 부분 구현 | ACK는 결과 readback이 아니며 RGB F5도 byte-exact backup이 아님. 기본값 plan·키맵·매크로·펌웨어·부트로더 live 작업과 임의 payload는 없으며, 고정 LCD 진단은 별도 row에 제한 | W |
 | 부분 transaction quarantine | F5/Feature/LCD 진단 작업의 첫 report 전에 target identity만 담은 durable marker를 atomic+fsync로 저장. report 제출 뒤 실패·cancel 미확인·postflight 실패 시 재실행 뒤에도 해당 target 작업을 차단 | 구현 | marker는 backup/rollback이 아님. cross-process lock은 KeyCanvas만 직렬화하므로 제조사 utility·Windows VM·기타 HID tool을 확인 전에 완전히 종료해야 함 | Q + W |
 | quarantine 해제 | 한 process에서 Device Inspector가 target 0 collection을 관찰한 뒤 동일 identity의 정확한 4 collection 재등장을 관찰하고, 사용자가 selector를 USB 위치에 둔 채 cable을 분리해 LCD·LED·장치가 완전히 꺼진 뒤 원래 USB 위치로 재연결했음을 확인한 경우에만 staged durable clear 수행. primary에는 `[]` receipt가 남고 `.pending-clear`는 동기화 후 제거되며 load는 두 파일의 identity 합집합을 사용 | 구현 | staged 제거·directory fsync 실패 시 old identity를 복원하고 error. serial이 없으면 원래 USB location 필요. 앱 재실행·handle close·빠른 USB 재연결·2.4G/BT 전환·marker/app data 삭제는 복구가 아님 | R + 사용자 확인 |
-| LCD output transport | 한 파일의 Feature 1개/Output 1개 call site에 bootstrap·qualified adapter를 제한. exact topology와 IORegistry IF3/IF2/common USB parent, one-use plan auth, page별 Output completion/expected input, no retry, postflight, durable lease·quarantine를 공통 강제. qualified encoder는 40프레임·2,592,768바이트 정책을 단일 Core API로 적용 | 실험적 부분 구현 | input에 page index가 없어 sequence는 page/flash 수락 증명이 아님. macOS는 numeric endpoint `0x03/0x84`를 직접 선택·관찰하지 않음. 중단 뒤 남은 lease는 다른 live 작업을 차단하고 retryable receipt→durable quarantine→자격 폐기로만 reconcile. 기존 실기는 evidence-only이고 새 receipt에 backfill되지 않음. fresh qualification 전에는 UI가 fail-closed하며 140프레임은 offline ceiling일 뿐 | W + U |
+| LCD output transport | 한 파일의 Feature 1개/Output 1개 call site에 bootstrap·정확히 140프레임 경계 시험·최종 qualified adapter를 제한. exact topology와 IORegistry IF3/IF2/common USB parent, one-use exact-plan auth, page별 Output completion/expected input, no retry, postflight, durable lease·quarantine를 공통 강제. 정책 v2는 140프레임·9,072,640바이트·2215페이지 경계와 최종 1…140 일반 plan을 서로 다른 admission으로 구분. exact production target에서 2215 sequence·commit·postflight와 전체 복구 자격 순서 완료 | 실험적 부분 구현 | input에 page index가 없어 2215 sequence도 page/flash 수락·물리 용량 증명이 아님. macOS는 numeric endpoint `0x03/0x84`를 직접 선택·관찰하지 않음. 중단 lease는 다른 live 작업을 차단하고 retryable receipt→durable quarantine→자격 폐기로만 reconcile. 미자격 target은 일반 Apply가 fail-closed | W + U |
 | 펌웨어/부트로더 | 의도적으로 없음 | 미구현 | 업데이트·추출·플래시·부트로더 진입은 프로젝트 범위 밖 | 제외 |
 
 ## 권장 우선순위
@@ -141,13 +149,13 @@ backfill하지 않으므로 그전까지 UI는 잠깁니다. 아래에서
    실기 확인을 거쳐 추가할지 판단합니다. 개인 식별자와 화면/매크로 payload는
    수집하지 않습니다.
 5. **P4 — 쓰기 복구 경계 검토:** 기본값 dry-run은 전체 초기화나 live restore로
-   확장하지 않습니다. LCD는 고정 진단에서 시작하는 Core 영속 qualification과
-   current-editor immutable 1…40프레임 exact-plan 경로를 구현했습니다. 기존 macOS
-   16/16·commit·postflight·모서리 육안 확인과 USB-mode cable removal→real absence→
-   same-location exact4 reappearance는 evidence일 뿐 production receipt로 backfill하지
-   않습니다. 새 build에서 fresh 전체 순서를 마치기 전에는 40프레임 UI가 fail-closed
-   하며, 각 qualified host 성공도 별도 육안 결과 전에는 완료로 간주하지 않습니다.
-   140프레임은 계속 offline format ceiling입니다.
+   확장하지 않습니다. LCD 정책 v2의 exact production target은 140프레임·2215페이지
+   전송, 제출 RGB565의 전체 재생·반복·색·순서 일치와 두 번째 USB-mode cable
+   removal→real absence→same-location exact4 reappearance→완전 무전원·애니메이션
+   지속 확인을 마쳐 1…140 Apply 자격을 얻었습니다. 이는 Windows 관찰과 별도의
+   KeyCanvas 실기 결과이며, 2215 input sequence 자체는 page index·물리 용량·flash
+   수락·readback·rollback을 증명하지 않습니다. 새 target은 같은 순서 전까지
+   fail-closed이고 receipt 이전 evidence-only 실기는 backfill하지 않습니다.
 
 펌웨어 업데이트, 추출, 플래시와 부트로더 진입은 우선순위 목록에 포함하지 않으며
 계속 프로젝트 범위 밖에 둡니다. 모든 단계에는

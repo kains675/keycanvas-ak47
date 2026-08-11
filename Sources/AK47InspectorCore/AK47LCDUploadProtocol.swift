@@ -89,8 +89,9 @@ public struct AK47LCDUploadPlan: Equatable, Sendable {
   public let container: AK47LCDEncodedContainer
 
   /// The 140-frame ceiling is known from host behavior, not a physical SPI
-  /// partition boundary. The live adapter is independently hard-limited to the
-  /// exact one-frame, 16-page diagnostic fixture.
+  /// partition boundary. The live adapter independently pins this ceiling to a
+  /// policy revision and requires the exact one-frame diagnostic plus the
+  /// maximum-boundary qualification sequence before ordinary uploads unlock.
   public var physicalPartitionEndVerified: Bool { false }
   public var unresolvedRisks: [AK47LCDUploadRisk] {
     [.unverifiedPhysicalPartitionEnd, .noVerifiedReadbackOrRecovery]

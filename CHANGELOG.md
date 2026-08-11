@@ -40,18 +40,29 @@
   diagnostic frame; the exact 16-page container SHA-256 is
   `312f98fd023d49711f73a677895b1bf48ac246c7dd687c813ed5642f42128bec`;
   every different bootstrap hash, frame/page shape and raw payload is rejected.
-- Added a Core-owned durable qualification receipt for the separately bounded
-  1...40-frame path. It requires a fresh receipt-build canonical transfer,
+- Added a Core-owned durable policy-v2 qualification receipt for the bounded
+  LCD path. It requires a fresh receipt-build canonical transfer,
   visual corner attestation, observed USB disconnection, exact same-port/four-
   collection reappearance, and explicit USB-mode cable-removal/unpowered
-  attestation in order. Production starts empty; historical trials have no
-  import, backfill or preference-based bypass.
-- Connected qualified Apply to a value copy of the current in-memory editor
-  project, including unsaved edits. Core's single qualified encoder enforces the
-  40-frame/2,592,768-byte budget; a final sheet displays and binds exact target,
-  frame/page/byte counts, address range, SHA-256 and delay conversion to one
-  authorization. Later editor/library changes cannot mutate that plan, and
-  edits above 40 frames are rejected without truncation or force.
+  attestation in order. A validated exact v1 qualified receipt migrates only
+  that canonical/recovery provenance into v2 boundary waiting, never 140-frame
+  success authority. Earlier evidence-only trials still have no import,
+  backfill or preference-based bypass.
+- Added a separate exact 140-frame/9,072,640-byte/2,215-page boundary trial after
+  canonical qualification. Its final sheet binds target, frame/page/byte counts,
+  address range, SHA-256 and delay conversion to one authorization. Host success
+  must pass exact submitted-RGB565 visual review and a second ordered USB-mode
+  cable-removal/absence/same-port-reappearance/unpowered attestation before
+  ordinary immutable 1...140-frame Apply is unlocked.
+- Completed that production policy-v2 boundary qualification on the exact
+  KeyCanvas target: all 2,215 Output completions elicited the expected input
+  sequence, commit and exact postflight completed, and the user confirmed full
+  playback, looping, colors and frame order. USB-mode cable removal produced
+  real absence, same-port reconnection produced exactly four collections, the
+  animation persisted, and the receipt finished qualified for 140 frames. This
+  macOS result is separate from the authorized-private Windows observations and
+  does not provide LCD readback, page-index evidence, physical-partition proof
+  or rollback.
 - Added durable canonical and qualified transfer leases before any HID path.
   Qualified host success now remains visual-review-pending; the review decodes
   the exact submitted RGB565 bytes. Exact visual match reopens qualification,
@@ -169,8 +180,10 @@
   immediate failure without retry, and preflight/postflight topology checks.
 - Kept keymap/macro writes, arbitrary payloads, firmware and bootloader
   operations outside the executable adapters. LCD bootstrap is hard-locked to
-  the one project-authored diagnostic fixture; qualified current-editor content
-  is bounded to 1...40 frames and an exact durable receipt/plan authorization.
+  the one project-authored diagnostic fixture; policy v2 admits only an exact
+  140-frame boundary plan before final qualification and then bounds ordinary
+  current-editor content to 1...140 frames with exact durable receipt/plan
+  authorization.
   Onboard mode parameters and clock values have no exact readback or automatic
   rollback; only the complete per-key RGB buffer has the separate F5 query.
 - Added operation-specific opt-in hardware tests; the normal suite skips them
@@ -198,22 +211,21 @@
   default restore, arbitrary raw LCD output, and firmware operations outside the
   executable public-app boundary.
 
-Known limitation: this development version applies only the clock, one selected
-onboard lighting value, a complete 84-key RGB table, the exact one-frame LCD
-bootstrap, or a qualified immutable 1...40-frame current-editor plan after
-separate confirmation. The evidence-only diagnostic trial
+Known limitation: live LCD evidence now covers experimental immutable
+1...140-frame current-editor plans on the exact target whose production
+policy-v2 boundary qualification completed. That result is empirical and does
+not establish LCD readback, indexed page acceptance, a physical partition
+boundary or rollback safety. The earlier evidence-only diagnostic trial
 completed 16/16 expected sequences, commit, exact postflight and user visual
 corner validation on macOS; ordered cable-removal absence and same-location
 exact-four reappearance were also observed. Because that trial predates the
 production receipt build, it cannot unlock anything. Qualified use requires a
-fresh fixed-fixture run under the new Core receipt path and the complete ordered
-qualification; the production store starts empty. Every qualified host success
-also requires exact visual review before authority reopens. 140 frames remains
-an offline format ceiling. The three-group
-default plan is inspection-only and cannot write hardware. The app does not
-read current onboard mode parameters, clock, keymaps, LCD content, macros, or
-general settings and cannot automatically restore their prior state. Firmware
-reading, extraction, updating, and flashing are not included.
+complete ordered qualification, and a new target starts fail-closed. Every host
+success also requires exact visual review before authority can advance. The
+three-group default plan is inspection-only and cannot write hardware. The app
+does not read current onboard mode parameters, clock, keymaps, LCD content,
+macros, or general settings and cannot automatically restore their prior state.
+Firmware reading, extraction, updating, and flashing are not included.
 
 ## 0.1.0 — 2026-08-08
 
